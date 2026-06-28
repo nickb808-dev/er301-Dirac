@@ -7,11 +7,6 @@ sample** the moment you select one from the card.
 
 Unit title: **Dirac** · mnemonic **Di** · stereo out
 
-> **Dirac is the time-domain sibling of Planck.** Planck is spectral (smooth
-> stretch, freeze, spectral blur); Dirac is classic granular — crisp transients,
-> formant-shifting pitch, dense clouds, regenerating **feedback**, and **binaural**
-> 3D placement — and very light on CPU. Named for the Dirac comb, a train of impulses.
-
 ---
 
 ## How it works
