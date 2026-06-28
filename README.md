@@ -96,7 +96,7 @@ clouds without making loud ones clip.
 **Visualizer.** The grain-field display draws each grain as an upward **triangle** —
 a Dirac-comb impulse — at its stereo position (horizontal) and pitch (vertical); the
 triangle pulses with the grain's envelope and leaves a phosphor afterglow as grains
-decay. (Planck/Bohr use round dots; the impulse triangles are Dirac's signature.)
+decay. (Impulse triangles are Dirac's signature.)
 
 ---
 
@@ -109,7 +109,7 @@ make dist ER301_SDK=~/er-301      # → build/am335x/dirac-<version>.pkg
 
 Requires Docker (cross-compiles for the AM3358 / Cortex-A8). Bump `VERSION` in the
 `Makefile` **and** `assets/toc.lua` on every flash — the firmware caches the `.so`
-per version. Dirac installs alongside Planck and Bohr (unique internal names).
+per version.
 
 ---
 
