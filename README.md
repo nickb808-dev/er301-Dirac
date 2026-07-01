@@ -5,7 +5,7 @@ the audio, windowed, pitched by playback speed, and layered into clouds.
 It runs on a **live input** by default and switches to granulating a **loaded
 sample** the moment you select one from the card.
 
-Unit title: **Dirac** · mnemonic **Di** · stereo out
+Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.1.17**
 
 ---
 
@@ -112,6 +112,42 @@ make dist ER301_SDK=~/er-301      # → build/am335x/dirac-<version>.pkg
 Requires Docker (cross-compiles for the AM3358 / Cortex-A8). Bump `VERSION` in the
 `Makefile` **and** `assets/toc.lua` on every flash — the firmware caches the `.so`
 per version.
+
+### Host test harness
+
+`test/host/` holds stub `od::` headers and a harness that runs the DSP on your
+computer (no hardware needed) — used to verify that optimizations are bit-identical,
+to fuzz long-grain / extreme-pitch edge cases under ASan/UBSan, and to measure
+seam-fade click levels:
+
+```bash
+g++ -std=c++11 -O2 -ffast-math -Itest/host -Isrc src/Dirac.cpp test/host/main.cpp -o t
+./t ident out.raw   # deterministic renders (bit-exactness comparisons)
+./t asan            # torture configs (build with -std=c++17 -fsanitize=address,undefined)
+./t seam <label>    # R-channel click metric at a sample loop boundary
+```
+
+---
+
+## Changelog (recent)
+
+- **0.1.17** — Code-review pass. Two safety fixes: guarded a rare out-of-bounds
+  envelope-table read on very long grains (float accumulator drift), and the seam
+  edge-fade now tracks the **right-channel read independently** — with Detune the R
+  read drifts far from L and could cross a loop boundary or the live write head
+  unfaded (right-channel click, now gone). CPU: source-read state hoisted out of the
+  per-sample loop, feedback path fully gated off in sample mode, power-of-two mask on
+  the ring write, envelope blend skips a table lerp at Texture nodes (incl. the 0.5
+  default). All CPU changes verified **bit-identical**; ASan/UBSan clean. Added the
+  host test harness (`test/host/`).
+- **0.1.16** — Micro-opts: binaural head-shadow filter skipped when Binaural is 0;
+  faster pitch-increment math (`expf` instead of `powf`).
+- **0.1.15** — **V/Oct** input: continuous 1 V/oct pitch CV, summed with SemiShift,
+  clamped ±4 octaves.
+- **0.1.14** — **Scale**: quantizes the Psprd pitch scatter to a musical scale
+  (chromatic / major / minor / penta / whole-tone) so clouds scatter musically.
+- **0.1.13** — Click-free Texture modulation: three static envelope tables, each
+  grain captures its shape at spawn — moving Texture never disturbs a playing grain.
 
 ---
 
