@@ -1,9 +1,9 @@
 # Dirac
 
 A **granular synthesizer** for the ER-301 named after [Paul Dirac](https://en.wikipedia.org/wiki/Paul_Dirac). Dirac chops a sound into short overlapping grains, each read straight from
-the audio, windowed, pitched by playback speed, and layered into clouds.
+the audio, windowed, pitched by playback speed, and layered.
 It runs on a **live input** by default and switches to granulating a **loaded
-sample** the moment you select one from the card.
+sample** as soon as you select one from the card.
 
 Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.1.17**
 
@@ -15,7 +15,7 @@ Each grain reads a short window of the source with linear interpolation, multipl
 it by an envelope, and plays it back — at a different speed to transpose. Many grains
 overlap into a continuous texture. Because it's time-domain, pitch shifting moves
 formants (the characteristic granular shimmer), transients stay sharp, and grains
-cost almost nothing — long grains and dense clouds are cheap, no per-grain buffers.
+cost almost nothing. Long grains and dense clouds are cheap, no per-grain buffers.
 
 **Two source modes (automatic):**
 
