@@ -1,6 +1,6 @@
 -- GrainFieldView — display-only ViewControl hosting the grain-field phosphor
 -- scope. One glowing dot per active grain: X = stereo field (Spread/Detune),
--- Y = pitch (Chord/Semitone/Psprd/HoldDetune), brightness = envelope. Freezes
+-- Y = pitch (Semitone/V-Oct/Psprd), brightness = envelope. Freezes
 -- on Hold. Subclasses the base ViewControl (no Zoomable — nothing to zoom).
 
 local app = app
@@ -30,12 +30,20 @@ function GrainFieldView:init(args)
     self:addSpotDescriptor{ center = (i - 0.5) * ply }
   end
 
-  -- Sub display: caption only (display has no editable parameters).
+  -- Sub display: Paul Dirac epigraph (display has no editable parameters).
   self.subGraphic = app.Graphic(0, 0, 128, 64)
-  local label = app.Label("grain field", 12)
-  label:fitToText(3)
-  label:setCenter(64, 32)
-  self.subGraphic:addChild(label)
+  local lines = {
+    { '"Pick a flower on Earth', 51 },   -- y: top (GRID5_LINE1) descending
+    { 'and you move the',        38 },
+    { 'farthest star"',          25 },
+    { '- Paul Dirac',            12 },
+  }
+  for _, ln in ipairs(lines) do
+    local label = app.Label(ln[1], 10)
+    label:fitToText(0)
+    label:setCenter(64, ln[2])
+    self.subGraphic:addChild(label)
+  end
 end
 
 return GrainFieldView

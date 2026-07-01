@@ -65,6 +65,59 @@ feedback is a possible v2 (blend sample + feedback ring).
 
 ## Changes log
 
+- **v0.1.17 — Code-review pass: 2 safety fixes + CPU micro-opts.** SAFETY: (1) **Env table OOB guard** —
+  `envPh` is a float accumulator; on very long grains (2 s ≈ 96k adds, margin only ~0.0107 ≈ 175 ulps at 1024)
+  rounding drift could push `ei` to kEnvTableSize → `eA[ei+1]` read past the 1025-entry table. One compare/sample
+  clamps it. (2) **R-channel seam fade** — the edge fade tracked only `readL`; with Detune the R read runs at a
+  different speed and drifts »kSeamGuard from L over a long grain, so R crossed the loop boundary / write head
+  UNFADED → right-channel click (ITD offset same story smaller). Now `relSeamR` is tracked per grain (st only),
+  each channel fades on its own distance. Host: detune-2 grain parked at a non-seamless boundary, R max delta
+  0.200 → 0.105 = the detune-0 legit-material floor (0.120). CPU (all host-verified BIT-IDENTICAL on sample-mode
+  busy config + live+feedback + texture nodes): (3) feedback path (capture mix + tanh loop) gated on `liveMode` —
+  sample mode paid 128 tanhf/block for an inert feature; `mFeedPrimed` clears mFeedBuf once on leaving so
+  re-entering doesn't inject a stale block; (4) **readHoisted()** — source read takes cap/sd/nc as ARGS, hoisted
+  once per grain-block (float stores to out[] can alias same-typed member loads → compiler couldn't hoist
+  mpSample->mpData/mChannelCount itself); readSrc kept as wrapper for the spawn peek; also hoisted `g.envIncr`;
+  (5) ring write uses power-of-two mask not compare-branch; (6) env blend skips the 2nd table lerp when ew==0
+  (exact: texture at 0 or the 0.5 default). Also `<cstdint>` in Dirac.h, deleted stale fork .o/.so cruft +
+  .DS_Store. ASan/UBSan clean (2 s held grains, ±4 oct, 5-sample sample, fb 0.95, detach transitions), 0
+  non-finite. Host harness (stubbed od:: headers + ident/asan/seam modes) now lives in **test/host/** —
+  `g++ -std=c++11 -O2 -ffast-math -Itest/host -Isrc src/Dirac.cpp test/host/main.cpp -o t && ./t ident out.raw`
+  (use -std=c++17 for the -fsanitize=address,undefined build; not part of the device .pkg).
+- **v0.1.16 — Code-review micro-opts (behavior-preserving).** (1) Hot render loop: gated the binaural
+  head-shadow one-pole LP behind `doShadow` (lpAlpha<1) — it was running 4 ops/sample even when Binaural=0
+  (transparent). Common (non-binaural) case now skips it. (2) `incL = powf(2,semis/12)` → `expf(kLog2Over12·semis)`
+  (exact, consistent with detuneRatio, faster than powf). Host: binaural still ~1.6× decorrelation, V/oct 1 V=12 st,
+  0 non-finite, ASan clean. Review verdict: engine already well-optimized (incremental render, gated seam-fade,
+  static env tables, mask/compare-subtract reads, sanitize+softLimit); no dead code, ports consistent. Minor
+  noted-not-changed: compress peek uses forward span for reverse grains (tiny estimate error); env blend does 2
+  lerps even at exact node textures.
+- **v0.1.15 — V/Oct pitch input.** New **V/Oct** inlet, continuous, summed with SemiShift (which stays the
+  coarse integer-semitone knob). ER-301 convention (from SDK TestOscillator + Conversions.h): normalized CV
+  1.0 = FULLSCALE_IN_VOLTS(10) octaves, so a patched 1 V = 0.1 → ×`kVoctToSemis`(120) = 12 st = 1 octave.
+  `semiShift = clamp(round(knob) + voct·120, ±kMaxTranspose=48)` (±4 oct ceiling, aliasing guard); this combined
+  transpose is what's passed to spawnGrain (now continuous, so V/oct tracks smoothly). Host: 1 V→12 st, 2 V→24,
+  −1 V→−12, knob+7 & 1 V→19, huge→clamp 48. ASan clean, ports consistent. Dial label "1V/oct pitch (patch here)"
+  — patchable input; SemiShift remains the manual transpose knob. **All three user TODOs now done** (Texture
+  clicks v0.1.13, Psprd scale v0.1.14, V/oct v0.1.15).
+- **v0.1.14 — Psprd scale quantization.** New **Scale** inlet/dial (integer 0–6): snaps each grain's Psprd
+  pitch scatter to a musical scale so clouds scatter *musically*. 0 off · 1 chromatic · 2 major · 3 minor ·
+  4 penta-maj · 5 penta-min · 6 whole-tone. `snapToScale(semis, scale)` reduces to pitch-class, finds nearest
+  degree (incl. octave wrap), re-adds octaves; applied to `psprdSemi` at spawn (before semiShift), so scale
+  degrees transpose with SemiShift. Implemented as a CV-modulatable dial (like the old Chord) not a menu
+  Option — od::Option needs menu wiring that wasn't worth the token cost; dial is proven + modulatable.
+  NOTE: param renamed `scale`→`scaleSel` in spawnGrain (local gain `scale` shadowed it). Host: OFF = all 12
+  PCs, MAJOR = {0,2,4,5,7,9,11}, pentaMaj = {0,2,4,7,9} exactly. ASan clean, ports consistent.
+  ⚠️ TODO still open: **V/oct input** (continuous, summed with SemiShift; ±~4 oct clamp; verify ER-301 volt
+  scaling) — discussed, not built.
+- **v0.1.13 — Fixed Texture-modulation CLICKS (real cause, not the earlier CPU one).** After v0.1.10 fixed the
+  CPU, the user still heard clicks when *modulating* Texture. Cause: ALL grains shared one `mEnvTable` read by
+  phase; rebuilding it (even throttled) made every IN-FLIGHT grain's amplitude step → a click per rebuild.
+  Fix: build **three STATIC shape tables once** (mPercTable/mHannTable/mTukeyTable, never rebuilt); each grain
+  captures Texture at spawn (`g.envTex`) and blends two tables at render. Modulating Texture now affects only
+  NEW grains — playing grains are untouched. Removed buildEnvTable(texture)/mEnvCacheTex/the throttle. Render
+  cost: 2 table lerps + 1 blend per sample (no rebuild ever). Host: Texture swept every block → maxDelta 0.0057
+  (< sine's own slope), click-free, 0 non-finite, ASan clean.
 - **v0.1.12 — Binaural (ITD + head-shadow), ported from Whirlpool.** New **Binaural** inlet [0,1] = 3D depth.
   Per grain: azimuth = pan·90° (pan = Spread-scattered position). ITD = ±31 samples (kMaxITDSamples) × sin(az)
   × binaural, applied as a read-position offset on the FAR ear (delayL/delayR off startPos). Head shadow =

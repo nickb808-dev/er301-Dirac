@@ -37,6 +37,35 @@ static inline float softLimit(float x)
     return (x >= 0.0f) ? lim : -lim;
 }
 
+// Snap a semitone offset to the nearest degree of a musical scale (0 = off).
+// Scales: 1 Chromatic · 2 Major · 3 Minor · 4 Penta-maj · 5 Penta-min · 6 Whole-tone.
+static inline float snapToScale(float semis, int scale)
+{
+    if (scale <= 0) return semis;
+    static const int kDeg[6][12] = {
+        {0,1,2,3,4,5,6,7,8,9,10,11},
+        {0,2,4,5,7,9,11, 0,0,0,0,0},
+        {0,2,3,5,7,8,10, 0,0,0,0,0},
+        {0,2,4,7,9, 0,0,0,0,0,0,0},
+        {0,3,5,7,10, 0,0,0,0,0,0,0},
+        {0,2,4,6,8,10, 0,0,0,0,0,0},
+    };
+    static const int kLen[6] = {12, 7, 7, 5, 5, 6};
+    if (scale > 6) scale = 6;
+    const int *deg = kDeg[scale - 1];
+    const int  n   = kLen[scale - 1];
+    const float oct  = floorf(semis / 12.0f);
+    const float frac = semis - oct * 12.0f;              // [0, 12)
+    float bestD = float(deg[0]), bestDist = fabsf(frac - float(deg[0]));
+    for (int i = 1; i < n; ++i) {
+        const float d = fabsf(frac - float(deg[i]));
+        if (d < bestDist) { bestDist = d; bestD = float(deg[i]); }
+    }
+    const float dwrap = fabsf(frac - 12.0f);             // nearest may be next-octave root
+    if (dwrap < bestDist) bestD = 12.0f;
+    return oct * 12.0f + bestD;
+}
+
 /* ── ctor / dtor ───────────────────────────────────────────────────────────── */
 
 Dirac::Dirac()
@@ -62,11 +91,15 @@ Dirac::Dirac()
     addInput(mFeedbackIn);
     addInput(mCompressIn);
     addInput(mBinauralIn);
+    addInput(mScaleIn);
+    addInput(mVoctIn);
 
     mCapBuf.assign(kCapBufSize, 0.0f);
     mFeedBuf.assign(FRAMELENGTH, 0.0f);
-    mEnvTable.assign(kEnvTableSize + 1, 0.0f);
-    buildEnvTable(0.0f);
+    mPercTable.assign(kEnvTableSize + 1, 0.0f);
+    mHannTable.assign(kEnvTableSize + 1, 0.0f);
+    mTukeyTable.assign(kEnvTableSize + 1, 0.0f);
+    buildEnvTables();
 }
 
 Dirac::~Dirac() {}
@@ -88,23 +121,19 @@ float Dirac::randUnipolar()
 }
 float Dirac::randBipolar() { return randUnipolar() * 2.0f - 1.0f; }
 
-/* ── envelope table ────────────────────────────────────────────────────────── */
-// Texture morphs THREE shapes:  Percussive (0) → Hann (0.5) → Tukey (1).
-//   • Percussive: fast attack + exponential decay → crisp transient "bits" for
-//     sparse short-grain clouds. Still zero-ended (click-free) via a release taper.
-//   • Hann (0.5, the default): smooth rounded grain — the classic neutral shape.
-//   • Tukey (1): flat top → more sustained / fuller grains.
+/* ── envelope tables ───────────────────────────────────────────────────────── */
+// Build the THREE shape tables ONCE. Texture (per grain, at spawn) blends two of
+// them:  Percussive (0) → Hann (0.5) → Tukey (1).
+//   • Percussive: fast attack + exponential decay → crisp transient "bits."
+//   • Hann (0.5, default): smooth rounded grain.
+//   • Tukey (1): flat top → fuller/sustained grains.
 // Read by phase in [0, kEnvTableSize]; index kEnvTableSize is a 0 guard point.
-void Dirac::buildEnvTable(float texture)
+void Dirac::buildEnvTables()
 {
     const float taper = 0.125f;   // Tukey cosine-taper fraction at each end
     const float atk   = 0.02f;    // percussive attack fraction
     const float rel   = 0.04f;    // percussive release-to-zero taper (click-free end)
-    // Exponential decay built INCREMENTALLY: one expf for the per-step ratio, then a
-    // single multiply per entry. Texture is rebuilt EVERY block while the encoder
-    // moves, so an expf PER entry (1025×/block) spiked the CPU — same trap that got
-    // Fog removed in v0.1.6. exp(-4·(t−atk)/(1−atk)) sampled at uniform steps is a
-    // geometric series, so the ratio below reproduces it exactly.
+    // Exponential decay built incrementally (one expf for the ratio, then a multiply).
     const float decayRatio = expf(-4.0f / ((1.0f - atk) * float(kEnvTableSize)));
     const float invRel     = 1.0f / rel;
     float decayVal = 1.0f;
@@ -112,15 +141,12 @@ void Dirac::buildEnvTable(float texture)
     for (int i = 0; i <= kEnvTableSize; ++i) {
         const float t = float(i) / float(kEnvTableSize);
 
-        const float hann = 0.5f * (1.0f - cosf(kTwoPi * t));
+        mHannTable[i] = 0.5f * (1.0f - cosf(kTwoPi * t));
 
-        float tukey;
-        if      (t < taper)        tukey = 0.5f * (1.0f - cosf(kPi * t / taper));
-        else if (t > 1.0f - taper) tukey = 0.5f * (1.0f - cosf(kPi * (1.0f - t) / taper));
-        else                       tukey = 1.0f;
+        if      (t < taper)        mTukeyTable[i] = 0.5f * (1.0f - cosf(kPi * t / taper));
+        else if (t > 1.0f - taper) mTukeyTable[i] = 0.5f * (1.0f - cosf(kPi * (1.0f - t) / taper));
+        else                       mTukeyTable[i] = 1.0f;
 
-        // Percussive: linear fast attack to 1, then incremental exponential decay;
-        // a short cosine release at the very end forces a clean zero (no click).
         float perc;
         if (t < atk) {
             perc = t / atk;
@@ -130,32 +156,29 @@ void Dirac::buildEnvTable(float texture)
             perc = decayVal;
         }
         if (t > 1.0f - rel) perc *= 0.5f * (1.0f - cosf(kPi * (1.0f - t) * invRel));
-
-        float env;
-        if (texture < 0.5f) {
-            const float w = texture * 2.0f;          // 0→1 over Texture 0..0.5
-            env = perc + w * (hann - perc);          // Percussive → Hann
-        } else {
-            const float w = (texture - 0.5f) * 2.0f; // 0→1 over Texture 0.5..1
-            env = hann + w * (tukey - hann);         // Hann → Tukey
-        }
-        mEnvTable[i] = env;
+        mPercTable[i] = perc;
     }
-    mEnvTable[0]             = 0.0f;   // guarantee click-free onset
-    mEnvTable[kEnvTableSize] = 0.0f;   // guarantee click-free tail
+    // Guarantee click-free onset & tail on every shape.
+    mPercTable[0] = mHannTable[0] = mTukeyTable[0] = 0.0f;
+    mPercTable[kEnvTableSize] = mHannTable[kEnvTableSize] = mTukeyTable[kEnvTableSize] = 0.0f;
 }
 
 /* ── source read (linear interpolation) ───────────────────────────────────── */
-inline float Dirac::readSrc(float pos, bool live, int sampleCount) const
+// readHoisted (v0.1.17): the interpolated read with all object state passed in as
+// plain args. The render loop pre-loads cap/sd/nc ONCE per grain per block — the
+// out-buffer stores are same-typed float writes, so the compiler could not hoist
+// the mpSample->mpData / mChannelCount / mCapBuf loads out of the hot loop itself.
+inline float Dirac::readHoisted(const float *cap, const float *sd, int nc,
+                                int sampleCount, bool live, float pos)
 {
     const float fp = floorf(pos);
     const float f  = pos - fp;
     if (live) {
-        int i0 = int(fp) & (kCapBufSize - 1);
-        int i1 = (i0 + 1) & (kCapBufSize - 1);
-        return mCapBuf[i0] + f * (mCapBuf[i1] - mCapBuf[i0]);
+        const int i0 = int(fp) & (kCapBufSize - 1);
+        const int i1 = (i0 + 1) & (kCapBufSize - 1);
+        return cap[i0] + f * (cap[i1] - cap[i0]);
     }
-    if (!mpSample || sampleCount <= 0) return 0.0f;
+    if (!sd || sampleCount <= 0) return 0.0f;
     // pos is kept in [0, sampleCount) by the render loop, so NO per-sample modulo
     // (the A8 has no integer divide). i0 is already in range; i1 wraps at the end.
     int i0 = int(fp);
@@ -165,15 +188,21 @@ inline float Dirac::readSrc(float pos, bool live, int sampleCount) const
     // Clamp here (cheap compares, no divide) so a degenerate input stays safe.
     if      (i0 >= sampleCount) i0 = sampleCount - 1;
     else if (i0 < 0)            i0 = 0;
-    int i1 = (i0 + 1 >= sampleCount) ? 0 : i0 + 1;
-    const int nc = int(mpSample->mChannelCount);
-    const float *d = mpSample->mpData;
-    if (nc <= 1) return d[i0] + f * (d[i1] - d[i0]);
-    const float *p0 = d + size_t(i0) * nc;
-    const float *p1 = d + size_t(i1) * nc;
+    const int i1 = (i0 + 1 >= sampleCount) ? 0 : i0 + 1;
+    if (nc <= 1) return sd[i0] + f * (sd[i1] - sd[i0]);
+    const float *p0 = sd + size_t(i0) * nc;
+    const float *p1 = sd + size_t(i1) * nc;
     const float s0 = 0.5f * (p0[0] + p0[1]);
     const float s1 = 0.5f * (p1[0] + p1[1]);
     return s0 + f * (s1 - s0);
+}
+
+// Convenience wrapper for cold paths (spawn-time compress peek).
+inline float Dirac::readSrc(float pos, bool live, int sampleCount) const
+{
+    return readHoisted(mCapBuf.data(), mpSample ? mpSample->mpData : nullptr,
+                       mpSample ? int(mpSample->mChannelCount) : 1,
+                       sampleCount, live, pos);
 }
 
 /* ── findSlot ──────────────────────────────────────────────────────────────── */
@@ -196,7 +225,8 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
                        float detune, float level, bool reverseProb,
                        float psprd, int grainsCap, bool held,
                        float semiShift, int grainDuration, float hopSamples,
-                       int sampleOffset, bool liveMode, float compress, float binaural)
+                       int sampleOffset, bool liveMode, float compress, float binaural,
+                       int scaleSel)
 {
     const int slot = findSlot(grainsCap);
     if (slot < 0) return;
@@ -227,9 +257,10 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
         basePos = playhead * float(sampleCount > 1 ? sampleCount - 1 : 0);
     }
 
-    const float psprdSemi = (psprd > 0.0f) ? (randBipolar() * psprd) : 0.0f;
+    float psprdSemi = (psprd > 0.0f) ? (randBipolar() * psprd) : 0.0f;
+    if (scaleSel > 0) psprdSemi = snapToScale(psprdSemi, scaleSel);   // quantize scatter to a scale
     const float semis     = semiShift + psprdSemi;
-    const float incL      = powf(2.0f, semis / 12.0f);
+    const float incL      = expf(kLog2Over12 * semis);   // 2^(semis/12), matches detuneRatio
 
     const float jit      = (posJtr > 0.0f) ? (posJtr * 4800.0f * randBipolar()) : 0.0f;
     const float startPos = basePos + jit;
@@ -262,6 +293,7 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
     g.age        = 0;
     g.envPhase   = 0.0f;
     g.envIncr    = envIncr;
+    g.envTex     = mCurTexture;   // capture Texture for this grain's life (no mid-grain jump)
     g.reverse    = reverseProb;   // per-spawn reverse decision (computed at call site)
     g.live       = liveMode;
     g.pitchIncrL = incL;
@@ -334,13 +366,19 @@ void Dirac::process()
     const float feedback = std::max(0.0f,  std::min(mFeedbackIn.buffer()[0], 1.0f));
     const float compress = std::max(0.0f,  std::min(mCompressIn.buffer()[0], 1.0f));
     const float binaural = std::max(0.0f,  std::min(mBinauralIn.buffer()[0], 1.0f));
+    const int   scale    = std::max(0, std::min(int(mScaleIn.buffer()[0] + 0.5f), 6));
     mVizSprd = sprd;  mVizDetune = detune;
     const float revprob  = std::max(0.0f,  std::min(mRevProbIn.buffer()[0], 1.0f));
     const float psprd    = std::max(0.0f,  std::min(mPsprdIn.buffer()[0],  12.0f));
     const float texture  = std::max(0.0f,  std::min(mTextureIn.buffer()[0], 1.0f));
     const int   grains   = std::max(1, std::min(int(mGrainsIn.buffer()[0] + 0.5f), kMaxGrains));
     const bool  holdOn   = (mHoldIn.buffer()[0] > 0.5f);
-    const float semiShift= roundf(std::max(-24.0f, std::min(mSemiShiftIn.buffer()[0], 24.0f)));
+    // Transpose = SemiShift (coarse, integer semitones) + V/Oct (smooth, 1 V = 1 oct).
+    // Clamped to ±4 octaves so extreme reads don't alias into garbage.
+    const float semiKnob = roundf(std::max(-24.0f, std::min(mSemiShiftIn.buffer()[0], 24.0f)));
+    const float voct     = mVoctIn.buffer()[0];
+    const float semiShift= std::max(-kMaxTranspose,
+                             std::min(semiKnob + voct * kVoctToSemis, kMaxTranspose));
     const float grainLenSec = std::max(0.001f, std::min(mGrainLenIn.buffer()[0],
                                        float(kMaxGrainSamp) / float(kSampleRate)));
     const int   grainDuration = std::max(64, std::min(int(grainLenSec * float(kSampleRate)),
@@ -348,30 +386,29 @@ void Dirac::process()
     const float *fireBuf = mFireIn.buffer();
 
     // ── Capture live input (+ feedback reinjection) into the ring ──────────
+    // Feedback is a LIVE-mode feature (grains read the ring only in live mode), so
+    // the whole feedback path is gated on liveMode — in sample mode the ring keeps
+    // capturing plain input (warm for detach) but pays no tanh/mix cost.
+    // Ring advance uses the power-of-two mask (kCapBufSize), not a compare-branch.
     {
         const float *in = mIn.buffer();
-        if (feedback > 0.0001f) {
+        if (liveMode && feedback > 0.0001f) {
             for (int s = 0; s < blockSize; ++s) {
                 mCapBuf[mCapWrite] = sanitize(in[s] + feedback * mFeedBuf[s]);
-                if (++mCapWrite >= kCapBufSize) mCapWrite = 0;
+                mCapWrite = (mCapWrite + 1) & (kCapBufSize - 1);
             }
         } else {
             for (int s = 0; s < blockSize; ++s) {
                 mCapBuf[mCapWrite] = sanitize(in[s]);
-                if (++mCapWrite >= kCapBufSize) mCapWrite = 0;
+                mCapWrite = (mCapWrite + 1) & (kCapBufSize - 1);
             }
         }
     }
 
-    // ── Envelope table: rebuild only when Texture changes by ≥1% ───────────
-    // The rebuild loops 1025 entries (cosf each); rebuilding every block while the
-    // Texture encoder sweeps is the CPU the user hit. Quantizing to a 1% grid caps
-    // it at ~101 rebuilds across the whole range — inaudible stepping, cheap.
-    const float texQ = roundf(texture * 100.0f) * 0.01f;
-    if (texQ != mEnvCacheTex) {
-        buildEnvTable(texQ);
-        mEnvCacheTex = texQ;
-    }
+    // Envelope tables are static (built once); each grain captures Texture at spawn
+    // and blends its own shape at render, so moving Texture never rebuilds anything
+    // and never disturbs a playing grain (no clicks).
+    mCurTexture = texture;
 
     if (!liveMode) mCurrentIndex = int(playhead * float(sampleCount > 1 ? sampleCount - 1 : 0));
     else           mCurrentIndex = 0;
@@ -392,7 +429,7 @@ void Dirac::process()
             if (spawnAt >= blockSize) spawnAt = blockSize - 1;
             spawnGrain(playhead, sampleCount, posJtr, sprd, detune, level,
                        (revprob > 0.0f) && (randUnipolar() < revprob), psprd, grains,
-                       holdOn, semiShift, grainDuration, hopSamples, spawnAt, liveMode, compress, binaural);
+                       holdOn, semiShift, grainDuration, hopSamples, spawnAt, liveMode, compress, binaural, scale);
             mSpawnTimer += hopSamples;
         }
     } else {
@@ -404,7 +441,7 @@ void Dirac::process()
             if (fireBuf[s] > 0.5f && last <= 0.5f) {
                 spawnGrain(playhead, sampleCount, posJtr, sprd, detune, level,
                            (revprob > 0.0f) && (randUnipolar() < revprob), psprd, grains,
-                           holdOn, semiShift, grainDuration, hopSamples, s, liveMode, compress, binaural);
+                           holdOn, semiShift, grainDuration, hopSamples, s, liveMode, compress, binaural, scale);
             }
             last = fireBuf[s];
         }
@@ -412,6 +449,11 @@ void Dirac::process()
     }
 
     // ── Render active grains (time-domain overlap-add) ─────────────────────
+    // Source state hoisted out of the hot loop (see readHoisted).
+    const float *capData = mCapBuf.data();
+    const float *smpData = mpSample ? mpSample->mpData : nullptr;
+    const int    smpNc   = mpSample ? int(mpSample->mChannelCount) : 1;
+
     for (int i = 0; i < kMaxGrains; ++i) {
         Grain &g = mGrains[i];
         if (!g.active) continue;
@@ -427,8 +469,18 @@ void Dirac::process()
         const float incL = g.reverse ? -g.pitchIncrL : g.pitchIncrL;
         const float incR = g.reverse ? -g.pitchIncrR : g.pitchIncrR;
         float readL = g.readPosL, readR = g.readPosR, envPh = g.envPhase;
+        const float envInc = g.envIncr;   // hoisted: g.* float loads can alias out-buffer stores
         const float lpAL = g.lpAlphaL, lpAR = g.lpAlphaR;   // head-shadow LP (1 = transparent)
         float lpL = g.lpStateL, lpR = g.lpStateR;
+        const bool doShadow = (lpAL < 0.9999f) || (lpAR < 0.9999f);   // binaural head-shadow engaged?
+        // This grain's envelope = blend of two static shape tables by its captured
+        // Texture (perc→Hann below 0.5, Hann→Tukey above). Selected once per grain.
+        // At an exact node (Texture 0 or the 0.5 default) ew == 0 → skip the second
+        // table lerp entirely (bit-identical: ea + 0·(eb−ea) == ea).
+        const float *eA, *eB; float ew;
+        if (g.envTex < 0.5f) { eA = mPercTable.data(); eB = mHannTable.data();  ew = g.envTex * 2.0f; }
+        else                 { eA = mHannTable.data(); eB = mTukeyTable.data(); ew = (g.envTex - 0.5f) * 2.0f; }
+        const bool blend = (ew != 0.0f);
 
         // Edge fade (anti-click): fade the grain as its read nears a SEAM — the
         // write head in live mode (read/write collision guard) or the sample loop
@@ -438,10 +490,18 @@ void Dirac::process()
         const float period = live ? float(kCapBufSize) : float(sampleCount);
         const float halfP  = 0.5f * period;
         const bool  doSeam = live ? true : (sampleCount > int(4.0f * kSeamGuard));
-        float relSeam = 0.0f;
+        // v0.1.17: the R read gets its OWN seam distance. With Detune the R read
+        // runs at a different speed and drifts far from L (»kSeamGuard over a long
+        // grain) — tracking only L let R cross a seam unfaded (R-channel click).
+        // ITD's read offset (Binaural) is the same story at smaller scale.
+        float relSeamL = 0.0f, relSeamR = 0.0f;
         if (doSeam) {
-            const float baseP = live ? (readL - float(mCapWrite)) : readL;
-            relSeam = baseP - period * floorf(baseP / period);   // [0, period)
+            const float basePL = live ? (readL - float(mCapWrite)) : readL;
+            relSeamL = basePL - period * floorf(basePL / period);   // [0, period)
+            if (st) {
+                const float basePR = live ? (readR - float(mCapWrite)) : readR;
+                relSeamR = basePR - period * floorf(basePR / period);
+            }
         }
 
         // Sample mode: keep read positions wrapped to [0, sampleCount) so the
@@ -458,32 +518,59 @@ void Dirac::process()
         // seam → skip all the fade work (the common-case CPU saving).
         bool seamActive = false;
         if (doSeam) {
-            const float distNow   = (relSeam < halfP) ? relSeam : (period - relSeam);
-            const float maxTravel = ((incL >= 0.0f) ? incL : -incL) * float(toRender);
-            seamActive = (distNow <= kSeamGuard + maxTravel + 1.0f);
+            const float distL = (relSeamL < halfP) ? relSeamL : (period - relSeamL);
+            const float travL = ((incL >= 0.0f) ? incL : -incL) * float(toRender);
+            seamActive = (distL <= kSeamGuard + travL + 1.0f);
+            if (st && !seamActive) {
+                const float distR = (relSeamR < halfP) ? relSeamR : (period - relSeamR);
+                const float travR = ((incR >= 0.0f) ? incR : -incR) * float(toRender);
+                seamActive = (distR <= kSeamGuard + travR + 1.0f);
+            }
         }
 
         for (int s = 0; s < toRender; ++s) {
-            const int   ei = int(envPh);
-            const float fr = envPh - float(ei);
-            const float env = mEnvTable[ei] + fr * (mEnvTable[ei + 1] - mEnvTable[ei]);
-            float fade = 1.0f;
-            if (seamActive) {
-                const float dist = (relSeam < halfP) ? relSeam : (period - relSeam);
-                if (dist < kSeamGuard) fade = dist * kInvSeamGuard;
-                relSeam += incL;
-                if      (relSeam >= period) relSeam -= period;
-                else if (relSeam <  0.0f)   relSeam += period;
+            int ei = int(envPh);
+            // Defensive clamp (v0.1.17): envPh is a float ACCUMULATOR; on very long
+            // grains the rounding drift can nudge the final reads up to
+            // kEnvTableSize, and eA[ei + 1] would then read past the table.
+            if (ei > kEnvTableSize - 1) ei = kEnvTableSize - 1;
+            const float fr  = envPh - float(ei);
+            float env = eA[ei] + fr * (eA[ei + 1] - eA[ei]);
+            if (blend) {
+                const float eb = eB[ei] + fr * (eB[ei + 1] - eB[ei]);
+                env += ew * (eb - env);
             }
-            const float e  = env * fade;
-            const float sL = readSrc(readL, live, sampleCount);
-            const float sR = st ? readSrc(readR, live, sampleCount) : sL;
-            // Head-shadow one-pole LP per ear (transparent when alpha == 1).
-            lpL += lpAL * (sL - lpL);
-            lpR += lpAR * (sR - lpR);
-            outL[outStart + s] += gL * e * lpL;
-            outR[outStart + s] += gR * e * lpR;
-            readL += incL; readR += incR; envPh += g.envIncr;
+            float fadeL = 1.0f, fadeR = 1.0f;
+            if (seamActive) {
+                const float distL = (relSeamL < halfP) ? relSeamL : (period - relSeamL);
+                if (distL < kSeamGuard) fadeL = distL * kInvSeamGuard;
+                relSeamL += incL;
+                if      (relSeamL >= period) relSeamL -= period;
+                else if (relSeamL <  0.0f)   relSeamL += period;
+                if (st) {                         // R fades on its own seam distance
+                    const float distR = (relSeamR < halfP) ? relSeamR : (period - relSeamR);
+                    if (distR < kSeamGuard) fadeR = distR * kInvSeamGuard;
+                    relSeamR += incR;
+                    if      (relSeamR >= period) relSeamR -= period;
+                    else if (relSeamR <  0.0f)   relSeamR += period;
+                } else {
+                    fadeR = fadeL;
+                }
+            }
+            const float eL = env * fadeL;
+            const float eR = env * fadeR;
+            const float sL = readHoisted(capData, smpData, smpNc, sampleCount, live, readL);
+            const float sR = st ? readHoisted(capData, smpData, smpNc, sampleCount, live, readR) : sL;
+            if (doShadow) {                       // binaural: one-pole LP on the far ear
+                lpL += lpAL * (sL - lpL);
+                lpR += lpAR * (sR - lpR);
+                outL[outStart + s] += gL * eL * lpL;
+                outR[outStart + s] += gR * eR * lpR;
+            } else {                              // common case: no filter, no extra work
+                outL[outStart + s] += gL * eL * sL;
+                outR[outStart + s] += gR * eR * sR;
+            }
+            readL += incL; readR += incR; envPh += envInc;
             if (!live) {
                 if      (readL >= wN) readL -= wN; else if (readL < 0.0f) readL += wN;
                 if      (readR >= wN) readR -= wN; else if (readR < 0.0f) readR += wN;
@@ -509,10 +596,16 @@ void Dirac::process()
     // feedback≈1. Driving the tanh recovers that so feedback approaches unity loop gain
     // near 1.0; tanh still bounds mFeedBuf to [-1,1] → saturates into a stable drone,
     // no runaway. Host-tuned: 0=silent, ~0.8=clear tail, ~1=stable drone.
-    if (feedback > 0.0001f) {
+    if (liveMode && feedback > 0.0001f) {
         const float drive = 2.5f;
         for (int s = 0; s < blockSize; ++s)
             mFeedBuf[s] = sanitize(tanhf(drive * 0.5f * (outL[s] + outR[s])));
+        mFeedPrimed = true;
+    } else if (mFeedPrimed) {
+        // Leaving the feedback path: clear so re-entering doesn't inject one block
+        // of stale audio from whenever feedback last ran.
+        std::fill(mFeedBuf.begin(), mFeedBuf.end(), 0.0f);
+        mFeedPrimed = false;
     }
 
     // ── Wet/dry Mix (LIVE mode only; dry = unity input passthrough) ────────

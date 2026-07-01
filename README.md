@@ -57,8 +57,10 @@ can run at once.
 | dens | Rate | 0–16 / 3 | **Density** — target grain overlap (how many deep). 0 = trigger-only (free-run off). |
 | gLen | GrainLen | 1 ms – 1 s / 50 ms | Grain length. |
 | grains | Grains | 1–16 / 12 | Polyphony cap — how many grains may overlap at once. |
-| semi | SemiShift | −24…+24 st / 0 | Global transpose (playback-speed pitch; V/oct-patchable). |
+| semi | SemiShift | −24…+24 st / 0 | Coarse transpose knob (integer semitones, playback-speed pitch). |
+| V/oct | V/Oct | 1 V/oct / 0 | Continuous pitch CV — patch a 1 V/oct source here; summed with SemiShift, clamped ±4 octaves. |
 | psprd | Psprd | 0–12 st / 0 | Per-grain pitch scatter. |
+| scale | Scale | 0–6 / 0 | Quantize the Psprd scatter to a scale: 0 off · 1 chromatic · 2 major · 3 minor · 4 penta-maj · 5 penta-min · 6 whole-tone. |
 | detun | Detune | 0–0.5 st / 0 | Stereo detune — R read pitched vs L for width. |
 | sprd | Spread | 0–1 / 0.5 | Stereo position scatter across grains (also the binaural **width**). |
 | posJtr | PosJtr | 0–1 / 0 | Random spray of each grain's read position (±100 ms). |

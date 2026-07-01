@@ -37,7 +37,7 @@ TOOLCHAIN ?= docker
 
 PKG     := dirac
 MODULE  := libdirac
-VERSION := 0.1.12
+VERSION := 0.1.17
 ARCH    := am335x
 
 SRCDIR  := src

@@ -29,6 +29,7 @@
 
 #include <vector>
 #include <cmath>
+#include <cstdint>
 #endif
 
 namespace dirac {
@@ -66,6 +67,8 @@ public:
     od::Inlet  mFeedbackIn  {"Feedback"};   // output→capture reinjection [0, 1] (LIVE mode)
     od::Inlet  mCompressIn  {"Compress"};   // per-grain leveling toward a target [0, 1]
     od::Inlet  mBinauralIn  {"Binaural"};   // 3D depth: ITD + head-shadow amount [0, 1]
+    od::Inlet  mScaleIn     {"Scale"};      // quantize Psprd scatter to a scale (0 = off)
+    od::Inlet  mVoctIn      {"V/Oct"};      // 1 V/oct pitch CV, summed with SemiShift
 
     /* ── Grain-field / head-display accessors ──────────────────────────── */
     int   getGrainCount()         const { return kMaxGrains; }
@@ -98,6 +101,8 @@ private:
     static constexpr float kTwoPi         = 6.28318530717959f;
     static constexpr float kLog2Over12    = 0.05776226504f;   // ln(2)/12
     static constexpr float kMaxITDSamples = 31.2f;            // ~0.65 ms Woodworth max ITD @ ±90°
+    static constexpr float kVoctToSemis   = 120.0f;           // FULLSCALE_IN_VOLTS(10)×12 st/oct; 1V=1oct
+    static constexpr float kMaxTranspose  = 48.0f;            // ±4-octave transpose ceiling
 
     /* ── Grain pool ─────────────────────────────────────────────────────── */
     struct Grain {
@@ -113,6 +118,7 @@ private:
         float readPos0L = 0.0f, readPos0R = 0.0f; // spawn positions (hold loop)
         float pitchIncrL = 1.0f, pitchIncrR = 1.0f;
         float envPhase = 0.0f, envIncr = 0.0f;    // envelope table phase
+        float envTex   = 0.5f;                     // Texture captured at spawn (held for life)
         float gainL = 1.0f, gainR = 1.0f;         // equal-power pan (centre = unity)
         float lpStateL = 0.0f, lpStateR = 0.0f;   // binaural head-shadow 1-pole LP state
         float lpAlphaL = 1.0f, lpAlphaR = 1.0f;   // LP coeff per ear (1 = transparent)
@@ -130,11 +136,17 @@ private:
     std::vector<float> mCapBuf;        // kCapBufSize
     int                mCapWrite = 0;
     std::vector<float> mFeedBuf;        // last block's output mono (feedback source)
+    bool               mFeedPrimed = false;  // mFeedBuf holds live data (cleared on leaving fb)
 
     /* ── Envelope table (morphed Hann→Tukey, rebuilt on Texture change) ─── */
-    std::vector<float> mEnvTable;       // kEnvTableSize + 1 (guard point)
-    float mEnvCacheTex = -1.0f;
-    void  buildEnvTable(float texture);
+    // Three STATIC shape tables built once (ctor), never rebuilt. Each grain blends
+    // two of them by the Texture it captured at spawn, so modulating Texture affects
+    // only NEW grains — no mid-grain envelope jump (= no clicks) and no rebuild cost.
+    std::vector<float> mPercTable;      // kEnvTableSize + 1
+    std::vector<float> mHannTable;
+    std::vector<float> mTukeyTable;
+    float mCurTexture = 0.5f;           // Texture at the current block (captured per spawn)
+    void  buildEnvTables();
 
     /* ── Spawn timing ───────────────────────────────────────────────────── */
     float mSpawnTimer = 0.0f;
@@ -146,12 +158,19 @@ private:
     float randBipolar();
 
     /* ── Helpers ────────────────────────────────────────────────────────── */
+    // readHoisted: interpolated source read with all object state passed as args, so
+    // the render loop hoists the mpSample->mpData / mChannelCount / mCapBuf.data()
+    // loads OUT of the hot loop (same-typed float stores to the out buffers may alias
+    // member loads, so the compiler cannot hoist them itself).
+    static inline float readHoisted(const float *cap, const float *sd, int nc,
+                                    int sampleCount, bool live, float pos);
     inline float readSrc(float pos, bool live, int sampleCount) const;
     void  spawnGrain(float playhead, int sampleCount, float posJtr, float sprd,
                      float detune, float level, bool reverseProb,
                      float psprd, int grainsCap, bool held,
                      float semiShift, int grainDuration, float hopSamples,
-                     int sampleOffset, bool liveMode, float compress, float binaural);
+                     int sampleOffset, bool liveMode, float compress, float binaural,
+                     int scaleSel);
     int   findSlot(int grainsCap);
 
 #endif // SWIGLUA
