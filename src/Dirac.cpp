@@ -93,6 +93,7 @@ Dirac::Dirac()
     addInput(mBinauralIn);
     addInput(mScaleIn);
     addInput(mVoctIn);
+    addInput(mSpeedIn);   // appended last (v0.1.18) — preserves existing port indices
 
     mCapBuf.assign(kCapBufSize, 0.0f);
     mFeedBuf.assign(FRAMELENGTH, 0.0f);
@@ -379,6 +380,7 @@ void Dirac::process()
     const float voct     = mVoctIn.buffer()[0];
     const float semiShift= std::max(-kMaxTranspose,
                              std::min(semiKnob + voct * kVoctToSemis, kMaxTranspose));
+    const float speed    = std::max(-4.0f, std::min(mSpeedIn.buffer()[0],  4.0f));
     const float grainLenSec = std::max(0.001f, std::min(mGrainLenIn.buffer()[0],
                                        float(kMaxGrainSamp) / float(kSampleRate)));
     const int   grainDuration = std::max(64, std::min(int(grainLenSec * float(kSampleRate)),
@@ -410,7 +412,27 @@ void Dirac::process()
     // and never disturbs a playing grain (no clicks).
     mCurTexture = texture;
 
-    if (!liveMode) mCurrentIndex = int(playhead * float(sampleCount > 1 ? sampleCount - 1 : 0));
+    // ── Playhead scan (v0.1.18): Speed decouples TIME from PITCH (sample mode).
+    // Grain pitch is per-grain read speed (SemiShift/V-Oct/Psprd, unchanged); Speed
+    // moves WHERE grains spawn: 0 = parked, the knob is the position (legacy,
+    // bit-identical); ±1 = original tempo forward/reverse, wrapping at the ends.
+    // Moving the Playhead knob re-seats the scan there. Live mode ignores Speed
+    // (Playhead remains the feedback delay-time control). Block-rate only.
+    float playheadEff = playhead;
+    if (!liveMode) {
+        if (speed != 0.0f && sampleCount > 1) {
+            if (fabsf(playhead - mLastPlayheadKnob) > 0.0005f)
+                mScanPos = double(playhead);          // knob touched → re-seat scan
+            mScanPos += double(speed) * double(blockSize) / double(sampleCount);
+            mScanPos -= floor(mScanPos);              // wrap [0,1)
+            playheadEff = float(mScanPos);
+        } else {
+            mScanPos = double(playhead);              // parked: follow the knob
+        }
+        mLastPlayheadKnob = playhead;
+    }
+
+    if (!liveMode) mCurrentIndex = int(playheadEff * float(sampleCount > 1 ? sampleCount - 1 : 0));
     else           mCurrentIndex = 0;
 
     // Density → spawn period. overlap = grains deep; hop = grainLen / overlap.
@@ -427,7 +449,7 @@ void Dirac::process()
             int spawnAt = blockSize + int(mSpawnTimer);
             if (spawnAt < 0)          spawnAt = 0;
             if (spawnAt >= blockSize) spawnAt = blockSize - 1;
-            spawnGrain(playhead, sampleCount, posJtr, sprd, detune, level,
+            spawnGrain(playheadEff, sampleCount, posJtr, sprd, detune, level,
                        (revprob > 0.0f) && (randUnipolar() < revprob), psprd, grains,
                        holdOn, semiShift, grainDuration, hopSamples, spawnAt, liveMode, compress, binaural, scale);
             mSpawnTimer += hopSamples;
@@ -439,7 +461,7 @@ void Dirac::process()
         float last = mLastFire;
         for (int s = 0; s < blockSize; ++s) {
             if (fireBuf[s] > 0.5f && last <= 0.5f) {
-                spawnGrain(playhead, sampleCount, posJtr, sprd, detune, level,
+                spawnGrain(playheadEff, sampleCount, posJtr, sprd, detune, level,
                            (revprob > 0.0f) && (randUnipolar() < revprob), psprd, grains,
                            holdOn, semiShift, grainDuration, hopSamples, s, liveMode, compress, binaural, scale);
             }
