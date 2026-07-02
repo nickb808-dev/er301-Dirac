@@ -5,7 +5,7 @@ the audio, windowed, pitched by playback speed, and layered.
 It runs on a **live input** by default and switches to granulating a **loaded
 sample** as soon as you select one from the card.
 
-Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.1.17**
+Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.1.18**
 
 ---
 
@@ -54,6 +54,7 @@ can run at once.
 | trig | Fire | gate | Spawns one grain per rising edge (manual button or patched gate). |
 | hold | Hold | toggle | Freezes the current grains into a looping, frozen cloud. |
 | playh | Playhead | 0–1 / 0 | **Sample:** read position. **Live:** how far back in the buffer grains read — also the **feedback delay** (0 = most recent / tight, 1 = oldest / long echo). |
+| speed | Speed | −4…+4 / 0 | **Playhead scan rate** (sample mode) — decouples time from pitch. 0 = parked (playh is the position, as before); 1 = original tempo; negative = reverse; wraps at the ends. Touching playh re-seats the scan. |
 | dens | Rate | 0–16 / 3 | **Density** — target grain overlap (how many deep). 0 = trigger-only (free-run off). |
 | gLen | GrainLen | 1 ms – 1 s / 50 ms | Grain length. |
 | grains | Grains | 1–16 / 12 | Polyphony cap — how many grains may overlap at once. |
@@ -131,6 +132,13 @@ g++ -std=c++11 -O2 -ffast-math -Itest/host -Isrc src/Dirac.cpp test/host/main.cp
 
 ## Changelog (recent)
 
+- **0.1.18** — **Speed**: playhead scan control, decoupling time from pitch (sample
+  mode). Grain pitch stays per-grain read speed; Speed moves where grains spawn —
+  1 = original tempo, 0.5 = half-time, negative = reverse, 0 = parked (identical to
+  before, bit-verified). Granular time-stretch in the Clouds/Nebulae tradition:
+  PosJtr/Psprd tame the comb at pitch 0, GrainLen sets the stutter-vs-wash character
+  of slowed transients. Costs ~nothing (block-rate accumulator). Keep Speed at 0
+  when CV-modulating Playhead (knob/CV changes re-seat the scan).
 - **0.1.17** — Code-review pass. Two safety fixes: guarded a rare out-of-bounds
   envelope-table read on very long grains (float accumulator drift), and the seam
   edge-fade now tracks the **right-channel read independently** — with Detune the R

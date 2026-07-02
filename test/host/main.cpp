@@ -27,7 +27,11 @@ static void setInputs(Dirac &d, const Ctl *ctls, int n)
                          &d.mDetuneIn, &d.mLevelIn, &d.mRevProbIn, &d.mPsprdIn, &d.mTextureIn,
                          &d.mGrainsIn, &d.mFireIn, &d.mHoldIn, &d.mSemiShiftIn, &d.mGrainLenIn,
                          &d.mMixIn, &d.mFeedbackIn, &d.mCompressIn, &d.mBinauralIn, &d.mScaleIn,
-                         &d.mVoctIn };
+                         &d.mVoctIn,
+#ifdef HAS_SPEED
+                         &d.mSpeedIn,
+#endif
+                       };
     for (int c = 0; c < n; ++c)
         for (auto *p : ins)
             if (!strcmp(p->mName, ctls[c].port))
@@ -125,7 +129,8 @@ int main(int argc, char **argv)
                              {"Psprd",12.0f},{"Texture",0.2f},{"Grains",16.0f},
                              {"SemiShift",24.0f},{"V/Oct",0.2f},   // +24 st clamp probe
                              {"GrainLen",2.0f},{"Hold",1.0f},{"Compress",1.0f},
-                             {"Binaural",1.0f},{"Detune",2.0f},{"Spread",1.0f}};
+                             {"Binaural",1.0f},{"Detune",2.0f},{"Spread",1.0f},
+                             {"Speed",4.0f}};
             setInputs(d, c, sizeof(c)/sizeof(c[0]));
             run(d, 3000, nullptr, nullptr, &nf);   // 3000 blocks = 8 s → grains complete + re-loop
             d.setSample(nullptr);
@@ -161,6 +166,41 @@ int main(int argc, char **argv)
         printf("%s: R-channel max sample delta = %.5f (nonFinite=%d)\n", argv[2], maxRD, nf);
         return 0;
     }
+
+#ifdef HAS_SPEED
+    if (!strcmp(argv[1], "speed")) {
+        // Ramp sample (sample[i] = i/count): windowed mean |out| tracks the scan
+        // position directly. 2 s sample; report 0.25 s windows over 5 s.
+        const float spd = float(atof(argv[2]));
+        const float knobAt2s = (argc > 3) ? float(atof(argv[3])) : -1.0f;   // optional mid-run knob touch
+        std::vector<float> st(96000);
+        for (int i = 0; i < 96000; ++i) st[i] = float(i) / 96000.0f;
+        od::Sample smp; smp.mSampleCount = 96000; smp.mChannelCount = 1; smp.mpData = st.data();
+        Dirac d; rng = 0x5eed;
+        d.setSample(&smp);
+        const Ctl c[] = {{"Playhead",0.0f},{"Rate",8.0f},{"Level",1.0f},{"Texture",0.5f},
+                         {"Grains",16.0f},{"GrainLen",0.02f},{"Speed",spd}};
+        setInputs(d, c, sizeof(c)/sizeof(c[0]));
+        const int blocksPerWin = int(0.25 * 48000 / FRAMELENGTH);
+        printf("speed=%.2f:", spd);
+        for (int w = 0; w < 20; ++w) {
+            if (knobAt2s >= 0.0f && w == 8) {   // knob touch at t=2 s
+                const Ctl k[] = {{"Playhead", knobAt2s}};
+                setInputs(d, k, 1);
+            }
+            double sum = 0.0; long cnt = 0;
+            for (int b = 0; b < blocksPerWin; ++b) {
+                for (int s = 0; s < FRAMELENGTH; ++s) d.mIn.buffer()[s] = 0.0f;
+                d.process();
+                for (int s = 0; s < FRAMELENGTH; ++s) { sum += fabsf(d.mOutL.buffer()[s]); cnt++; }
+            }
+            printf(" %.3f", sum / cnt);
+        }
+        printf("\n");
+        d.setSample(nullptr);
+        return 0;
+    }
+#endif
 
     fprintf(stderr, "unknown mode\n");
     return 2;

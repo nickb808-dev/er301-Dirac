@@ -82,6 +82,7 @@ function Dirac:onLoadGraph(channelCount)
   connect(tune, "Out", head, "V/Oct")
   self:addMonoBranch("voct", tune, "In", tune, "Out")
   param(self, head, "grainlen",  "GrainLen",  0.050)   -- seconds (50 ms)
+  param(self, head, "speed",     "Speed",     0.0)     -- playhead scan rate; 0 = parked (sample mode)
   param(self, head, "mix",       "Mix",       1.0)     -- wet/dry (live mode only); 1 = all wet
   param(self, head, "feedback",  "Feedback",  0.0)     -- output→capture reinjection (live mode)
   param(self, head, "compress",  "Compress",  0.0)     -- per-grain leveling toward a target
@@ -233,7 +234,7 @@ end
 --   grainlen  ≈ "duration"
 -- then the granulation controls, with level last.
 local controlOrder = {
-  "trig", "hold", "semishift", "voct", "playhead", "grainlen", "grains", "rate",
+  "trig", "hold", "semishift", "voct", "playhead", "speed", "grainlen", "grains", "rate",
   "posjtr", "spread", "detune",
   "psprd", "scale", "texture", "compress", "revprob", "level", "mix", "feedback", "binaural",
 }
@@ -273,6 +274,11 @@ function Dirac:onLoadViews(objects, branches)
   end
 
   gb("playhead", "playh", "Read pos; live: fb delay", Encoder.getMap("[0,1]"), 0.0)
+  -- Speed (v0.1.18): playhead scan rate — decouples TIME from PITCH (sample mode).
+  -- 0 = parked (playh is the position, exactly as before); 1 = original tempo;
+  -- negative = reverse; wraps at the sample ends. Touching playh re-seats the scan.
+  gb("speed",    "speed", "Scan rate (0=park 1=tempo)", app.LinearDialMap(-4, 4), 0.0,
+     app.LinearDialMap(-4, 4))
   gb("rate",     "dens",  "0 = trig only", app.LinearDialMap(0, 16), 3.0, app.LinearDialMap(-16, 16))
   gb("posjtr",   "posJtr","Position jitter", Encoder.getMap("[0,1]"), 0.0)
   gb("spread",   "sprd",  "Stereo spread", Encoder.getMap("[0,1]"), 0.5)

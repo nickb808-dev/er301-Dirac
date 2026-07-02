@@ -65,6 +65,20 @@ feedback is a possible v2 (blend sample + feedback ring).
 
 ## Changes log
 
+- **v0.1.18 — Speed: playhead scan (pitch/time decoupling, sample mode).** New **Speed** inlet
+  [−4, 4], default 0, appended LAST (preserves port indices; SWIG regen not strictly needed —
+  ports are runtime-registered — but `make dist` regenerates anyway). Grain pitch is unchanged
+  (per-grain read speed); Speed moves WHERE grains spawn: `mScanPos` (double, block-rate — float
+  lacks sample resolution on long samples) advances `speed·blockSize/sampleCount` per block,
+  wraps [0,1). Speed 0 → parked, scan follows the knob = legacy behavior (host-verified
+  BIT-IDENTICAL to 0.1.17); Speed 1 = original tempo; negative = reverse. Touching the Playhead
+  knob (change > 0.0005) re-seats the scan there — so Playhead-CV patches should keep Speed at 0
+  (documented; CV wobble would re-seat constantly). Live mode ignores Speed (Playhead stays the
+  fb delay-time control). Time-stretch artifacts are the classic granular kind: comb/phasiness
+  at pitch≈0 + regular spawns (PosJtr/Psprd decorrelate), transient stutter at slow speeds
+  (GrainLen scales it). CPU ≈ 0 (block-rate accumulator only). Host: ramp-sample scan verified
+  at speed ±1/0.5/±4 (correct traverse rates + wrap), knob re-seat verified, ASan/UBSan clean
+  with Speed=4 in the torture config. Lua: "speed" dial (−4..4) after playh.
 - **v0.1.17 — Code-review pass: 2 safety fixes + CPU micro-opts.** SAFETY: (1) **Env table OOB guard** —
   `envPh` is a float accumulator; on very long grains (2 s ≈ 96k adds, margin only ~0.0107 ≈ 175 ulps at 1024)
   rounding drift could push `ei` to kEnvTableSize → `eA[ei+1]` read past the 1025-entry table. One compare/sample

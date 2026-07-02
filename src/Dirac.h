@@ -69,6 +69,7 @@ public:
     od::Inlet  mBinauralIn  {"Binaural"};   // 3D depth: ITD + head-shadow amount [0, 1]
     od::Inlet  mScaleIn     {"Scale"};      // quantize Psprd scatter to a scale (0 = off)
     od::Inlet  mVoctIn      {"V/Oct"};      // 1 V/oct pitch CV, summed with SemiShift
+    od::Inlet  mSpeedIn     {"Speed"};      // playhead scan rate [-4,4]; 0 = parked (v0.1.18)
 
     /* ── Grain-field / head-display accessors ──────────────────────────── */
     int   getGrainCount()         const { return kMaxGrains; }
@@ -151,6 +152,13 @@ private:
     /* ── Spawn timing ───────────────────────────────────────────────────── */
     float mSpawnTimer = 0.0f;
     float mLastFire   = 0.0f;
+
+    /* ── Playhead scan (v0.1.18: pitch/time decoupling, sample mode) ────── */
+    // Speed != 0 advances the spawn position through the sample independently
+    // of grain pitch (granular time-stretch). double: block-rate only, and
+    // float lacks sample resolution on long samples.
+    double mScanPos          = 0.0;    // normalized [0,1)
+    float  mLastPlayheadKnob = -1.0f;  // reseat detector (knob touch re-seats scan)
 
     /* ── PRNG ───────────────────────────────────────────────────────────── */
     uint32_t mRandState = 0x1234abcdu;
