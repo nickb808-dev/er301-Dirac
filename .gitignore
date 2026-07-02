@@ -1,0 +1,5 @@
+# Exclude Claude/Agent memory folders and local configurations
+MEMORY.md
+.claude/
+CLAUDE.local.md
+
