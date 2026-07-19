@@ -66,6 +66,7 @@ namespace dirac
     static const int kMaxH = 64;
     uint8_t mPixels[kMaxW * kMaxH];
     bool    mCleared = false;
+    uint32_t mFrame  = 0;
 
     // Pitch axis half-span in semitones (±). Covers chord + moderate transpose.
     static constexpr float kPitchHalfSpan = 18.0f;
@@ -84,7 +85,11 @@ namespace dirac
     //   0.0  Percussive — the wedge LEANS (fast attack, long decay)
     //   0.5  Hann       — a symmetric triangle (the classic Dirac arrowhead)
     //   1.0  Tukey      — a FLAT-TOPPED trapezoid (plateau window)
-    inline void triSplat(int w, int h, int x, int y, int amt, int size, float tex)
+    // v0.2.5: `rev` flips the arrowhead to point DOWN (reverse grains — an
+    // upside-down Dirac comb), `hollow` draws only the outline + solid base
+    // (sample-mode REGEN grains, i.e. Feedback's share of the cloud).
+    inline void triSplat(int w, int h, int x, int y, int amt, int size, float tex,
+                         bool rev, bool hollow)
     {
       if (size < 1) size = 1;
       // Above 0.5 → grow a plateau (Tukey).  Below 0.5 → lean the wedge (percussive).
@@ -92,14 +97,23 @@ namespace dirac
       const float skew = (tex < 0.5f) ? (0.5f - tex) * 2.0f : 0.0f;   // 0 … 1
       for (int r = 0; r <= size; ++r)
       {
-        const int yy = y + r - (size >> 1);     // bottom (r=0) → apex on top (r=size)
+        // bottom (r=0) → apex on top (r=size); reverse grains point down.
+        const int yy = rev ? (y - r + (size >> 1)) : (y + r - (size >> 1));
         int half = size - r;                    // base widest, apex a point …
         if (half < flat) half = flat;           // … unless a Tukey plateau caps it
         const int lean = int(skew * float(r) * 0.9f + 0.5f);   // percussive tilt
         int a = amt - (r >> 1);                 // slight fade toward the base
         if (a < 2) a = 2;
-        for (int dx = -half; dx <= half; ++dx)
-          addPix(w, h, x + dx - lean, yy, a);
+        if (hollow && r > 0 && half > 0)
+        {
+          addPix(w, h, x - half - lean, yy, a);  // outline only …
+          addPix(w, h, x + half - lean, yy, a);
+        }
+        else
+        {
+          for (int dx = -half; dx <= half; ++dx) // … solid base row / filled glyph
+            addPix(w, h, x + dx - lean, yy, a);
+        }
       }
     }
     inline void addPix(int w, int h, int x, int y, int amt)
@@ -119,9 +133,14 @@ namespace dirac
 
       if (!mCleared) { memset(mPixels, 0, sizeof(mPixels)); mCleared = true; }
 
-      // Phosphor decay — every pixel fades one level per frame (~0.4 s @ 40 fps).
-      for (int i = 0; i < w * h; i++)
-        if (mPixels[i] > 0) mPixels[i]--;
+      // Phosphor decay — one level per frame (~0.4 s @ 40 fps). With Diffuse ON
+      // it fades every OTHER frame: trails linger ~2× — the halo you hear is
+      // the smear you see (v0.2.5).
+      mFrame++;
+      const bool slowFade = mpGrain && mpGrain->getDiffuseOn();
+      if (!slowFade || (mFrame & 1u))
+        for (int i = 0; i < w * h; i++)
+          if (mPixels[i] > 0) mPixels[i]--;
 
       if (mpGrain)
       {
@@ -132,6 +151,7 @@ namespace dirac
         const float splitX = detune * (w * 0.45f); // detune → L/R split, scaled to panel width
         const bool  wide   = (spread > 0.01f) || (detune > 0.001f);
         const float tex    = mpGrain->getVizTexture();  // morphs the glyph shape
+        const bool  sampleMode = mpGrain->isSampleMode();
 
         const int N = mpGrain->getGrainCount();
         for (int i = 0; i < N; i++)
@@ -158,8 +178,24 @@ namespace dirac
           if (size > kMaxTri) size = kMaxTri;
 
           int py = (int)(ny * (h - 1) + 0.5f);
-          int amt = 5 + (int)(env * 10.0f);                     // bright mid-grain
+
+          // Honest brightness (v0.2.5): envelope × the grain's REAL gain — so
+          // Level dims the whole field, Compress visibly evens it out, and loud
+          // vs quiet source bits read at a glance.
+          float loud = env * mpGrain->getGrainGain(i) * 2.0f;
+          if (loud > 1.0f) loud = 1.0f;
+          // Color (v0.2.5): spectrally dark grains draw DIM. alphaMin spans
+          // ~0.075 (600 Hz, Color full) … 0.93 (open); binaural's shadowed far
+          // ear also dims a touch — farther reads darker, which is right.
+          const float aMin = mpGrain->getGrainAlphaMin(i);
+          float dim = 0.35f + 0.76f * (aMin - 0.075f);
+          if (dim > 1.0f) dim = 1.0f; else if (dim < 0.35f) dim = 0.35f;
+          int amt = 4 + (int)(loud * dim * 12.0f);              // bright mid-grain
           if (amt > 15) amt = 15;
+
+          // Reverse grains point DOWN; sample-mode regen grains draw HOLLOW.
+          const bool revG   = mpGrain->getGrainReverse(i);
+          const bool hollow = sampleMode && mpGrain->getGrainLive(i);
 
           if (mAxisMode)
           {
@@ -169,28 +205,34 @@ namespace dirac
             float pos = mpGrain->getGrainReadPos01(i);
             if (!(pos == pos)) continue;                        // NaN guard
             if (pos < 0.0f) pos = 0.0f; else if (pos > 1.0f) pos = 1.0f;
-            triSplat(w, h, (int)(pos * (w - 1) + 0.5f), py, amt, size, tex);
+            triSplat(w, h, (int)(pos * (w - 1) + 0.5f), py, amt, size, tex, revG, hollow);
             continue;
           }
 
           int xc = (int)(cx + pan * halfW + 0.5f);
           if (wide)
           {
-            triSplat(w, h, (int)(xc - splitX + 0.5f), py, amt, size, tex);  // L image
-            triSplat(w, h, (int)(xc + splitX + 0.5f), py, amt, size, tex);  // R image
+            triSplat(w, h, (int)(xc - splitX + 0.5f), py, amt, size, tex, revG, hollow);  // L
+            triSplat(w, h, (int)(xc + splitX + 0.5f), py, amt, size, tex, revG, hollow);  // R
           }
           else
           {
-            triSplat(w, h, xc, py, amt, size, tex);             // mono
+            triSplat(w, h, xc, py, amt, size, tex, revG, hollow);   // mono
           }
         }
       }
 
       // POSITION mode gets a dim baseline so the axis reads as an axis (and so
-      // an empty field still shows you which mode you're in).
+      // an empty field still shows you which mode you're in). v0.2.5: the dashes
+      // CRAWL with the capture write head (~12 px/s) and park when Capture is
+      // frozen — the axis itself shows recording state.
       if (mAxisMode)
-        for (int x = 0; x < w; x += 2)
-          addPix(w, h, x, 0, 3);
+      {
+        const int phase = mpGrain ? ((mpGrain->getCapWritePos() >> 12) & 3) : 0;
+        for (int x = 0; x < w; ++x)
+          if (((x - phase) & 3) < 2)
+            addPix(w, h, x, 0, 3);
+      }
 
       // Background + phosphor render (monochrome; v is the 4-bit intensity).
       fb.fill(BLACK, mWorldLeft, mWorldBottom,

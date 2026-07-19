@@ -600,6 +600,32 @@ Recipe now documented: `dens 2 / grains 3 / gLen 500 ms / orbit 1`, then add `bi
 Corrected in README feature note, control table, quick start, and changelog.
 **Lesson: don't write performance advice from the design intent — measure it.**
 
+## v0.2.5 — every control reaches the field (2026-07)
+
+Nick: "each control should have some effect on the visualization." Six mappings,
+all reading per-grain state the DSP already stores (new inline accessors in
+Dirac.h, inside #ifndef SWIGLUA — no wrap change). Display-rate only; zero
+audio-thread cost. Mix deliberately skipped (the field shows the cloud, not the
+dry path).
+
+- **rev → glyph flips** (`triSplat` gained `rev`): reverse grains point DOWN.
+- **Color/binaural shadow → brightness dim** via `getGrainAlphaMin` mapped
+  [0.075..0.93] → [0.35..1]. Binaural far-ear shadow dims too = depth cue.
+- **Regen grains → hollow outline** (`hollow`: outline + solid base row) when
+  `isSampleMode() && getGrainLive(i)` — you SEE Feedback's share of the cloud.
+- **Diffuse → 2× phosphor** (decay every other frame, mFrame counter).
+- **Freeze → baseline parks**: position-mode dashes (period-4, 2-on) crawl at
+  `(mCapWrite >> 12) & 3` ≈ 12 px/s, stop dead when the ring freezes. Free
+  freeze indicator — no option accessor needed, the write head IS the state.
+- **Honest brightness**: `amt = 4 + env·getGrainGain·2.0(clamp 1)·dim·12` —
+  Level scales the field, Compress evens it, source dynamics read out. Replaces
+  the old pure-envelope `5 + env·10`.
+
+Verified: header syntax-checked against throwaway od/graphics stubs (not
+committed); host suite + ASan unchanged (graphic isn't in the harness); needs
+device eyes for the aesthetics — dim floor (0.35) and crawl rate are the two
+knobs to tweak if it reads wrong.
+
 ### Orbit REMOVED in v0.2.4 — and why
 
 Shipped in 0.2.0, cut in 0.2.4 after hardware listening ("doesn't seem to make much

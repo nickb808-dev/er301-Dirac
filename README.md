@@ -5,7 +5,7 @@ the audio, windowed, pitched by playback speed, and layered.
 It runs on a **live input** by default and switches to granulating a **loaded
 sample** as soon as you select one from the card.
 
-Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.4**
+Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.5**
 
 ---
 
@@ -211,6 +211,15 @@ g++ -std=c++11 -O2 -ffast-math -Itest/host -Isrc src/Dirac.cpp test/host/main.cp
 
 ## Changelog (recent)
 
+- **0.2.5** — **Every control now reaches the grain field.** Reverse grains point
+  *down* (an upside-down Dirac comb); spectrally dark grains (Color, or the
+  binaural head-shadow) draw dim; sample-mode regeneration grains (Feedback's
+  share of the cloud) draw as hollow outlines; Diffuse doubles the phosphor
+  afterglow — the halo you hear is the smear you see; the position-axis baseline
+  crawls with the capture write head and parks when Capture is frozen; and glyph
+  brightness is now the grain's *real* loudness (envelope × gain), so Level dims
+  the field and Compress visibly evens it out. Display-side only — zero audio
+  CPU change.
 - **0.2.4** — **Removed Orbit.** It measured real (roughly double the stereo-balance
   swing, +254% image-movement rate at `dens 2 / gLen 500 ms`) but never earned its
   strip slot on hardware. Three things capped it: equal-power panning is only a ~5 dB

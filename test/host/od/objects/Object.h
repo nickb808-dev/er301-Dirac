@@ -16,7 +16,7 @@ struct Option {
     const char *mName;
     int mValue;
     Option(const char *n, int v = 0) : mName(n), mValue(v) {}
-    int  value() const { return mValue; }
+    int  value() { return mValue; }  // non-const, matching the device SDK
     void set(int v) { mValue = v; }
 };
 struct Object {

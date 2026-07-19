@@ -136,6 +136,27 @@ public:
     float getVizSpread()          const { return mVizSprd; }
     float getVizDetune()          const { return mVizDetune; }
     float getVizTexture()         const { return mCurTexture; }   // glyph shape (v0.2.0)
+    // ── v0.2.5: every control reaches the field. All read state the DSP
+    // already keeps per grain — display-rate only, zero audio-thread cost.
+    bool  getGrainReverse(int i)  const { return mGrains[i].reverse; }  // glyph points down
+    bool  getGrainLive(int i)     const { return mGrains[i].live; }     // + isSampleMode → regen grain
+    bool  isSampleMode()          const { return mpSample != nullptr; }
+    // Darker of the two filter alphas: Color scatter (and the binaural shadow)
+    // → glyph brightness. 1 = fully open.
+    float getGrainAlphaMin(int i) const {
+        const Grain &g = mGrains[i];
+        return (g.lpAlphaL < g.lpAlphaR) ? g.lpAlphaL : g.lpAlphaR;
+    }
+    // The grain's real gain (level · density comp · Compress makeup · pan) —
+    // honest brightness: Compress evens the field, Level dims it.
+    float getGrainGain(int i)     const {
+        const Grain &g = mGrains[i];
+        return g.scale * 0.5f * (g.gainL + g.gainR);
+    }
+    // NOT const: the device SDK's od::Option::value() is non-const (the host
+    // stub's is const, which is why this compiled in the harness).
+    bool  getDiffuseOn()                { return mDiffuseOpt.value() >= 2; }
+    int   getCapWritePos()        const { return mCapWrite; }  // baseline crawl; parks on Freeze
     // Harness-facing accessors (v0.2.0): spawn read position + current pan
     // gains, so the host tests don't need to reach into private grain state.
     float getGrainSpawnPos(int i) const { return mGrains[i].readPos0L; }
