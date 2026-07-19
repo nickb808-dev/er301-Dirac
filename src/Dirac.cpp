@@ -12,6 +12,11 @@
 
 namespace dirac {
 
+// C++11: static constexpr arrays are ODR-used when indexed in a loop, so they
+// need out-of-line definitions (C++17 would make them implicitly inline).
+constexpr int Dirac::kApSizeL[Dirac::kApStages];
+constexpr int Dirac::kApSizeR[Dirac::kApStages];
+
 // Finiteness guard (see planck v0.8.2). A NaN/Inf from a corrupt sample read or a
 // glitchy input poisons the capture ring + feedback loop (tanh(NaN)=NaN) and held
 // grains → non-finite output that escapes downstream and survives deleting the unit.
@@ -94,9 +99,21 @@ Dirac::Dirac()
     addInput(mScaleIn);
     addInput(mVoctIn);
     addInput(mSpeedIn);   // appended last (v0.1.18) — preserves existing port indices
+    addOption(mMultiHeadOpt);  // v0.2.0 — multi-playhead enable (default Off)
+    addInput(mHeadsIn);        // v0.2.0 — appended after Speed, same reasoning
+    addInput(mHeadSpreadIn);
+    addInput(mHeadTuneIn);
+    addInput(mSnapIn);         // v0.2.0 — onset-locked spawning
+    addInput(mColorIn);        // v0.2.2 — per-grain cutoff scatter
+    addOption(mDiffuseOpt);    // v0.2.2 — wet-path allpass diffuser (menu)
+    addOption(mFreezeOpt);     // v0.2.2 — capture-ring write freeze (menu)
 
     mCapBuf.assign(kCapBufSize, 0.0f);
     mFeedBuf.assign(FRAMELENGTH, 0.0f);
+    for (int k = 0; k < kApStages; ++k) {          // v0.2.2 diffuser delay lines
+        mApBufL[k].assign(size_t(kApSizeL[k]), 0.0f);
+        mApBufR[k].assign(size_t(kApSizeR[k]), 0.0f);
+    }
     mPercTable.assign(kEnvTableSize + 1, 0.0f);
     mHannTable.assign(kEnvTableSize + 1, 0.0f);
     mTukeyTable.assign(kEnvTableSize + 1, 0.0f);
@@ -227,11 +244,38 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
                        float psprd, int grainsCap, bool held,
                        float semiShift, int grainDuration, float hopSamples,
                        int sampleOffset, bool liveMode, float compress, float binaural,
-                       int scaleSel)
+                       int scaleSel, int heads, float headSpread, float headTune,
+                       float snap,
+                       float feedback, float color)
 {
     const int slot = findSlot(grainsCap);
     if (slot < 0) return;
     Grain &g = mGrains[slot];
+
+    // ── Sample-mode feedback (v0.2.2): regeneration grains ─────────────────
+    // In live mode every grain reads the ring, so feedback regenerates by
+    // construction. In sample mode the ring now captures the wet output too
+    // (see process()), and a FEEDBACK-SIZED SHARE of new grains reads the ring
+    // instead of the sample: fdbk 0.3 → ~30% regen grains mixed into the cloud,
+    // 1.0 → the cloud granulates almost only its own output. Per-grain source
+    // choice keeps the render loop untouched (g.live already branches the read).
+    bool srcLive = liveMode;
+    if (!liveMode && feedback > 0.0001f && randUnipolar() < feedback)
+        srcLive = true;
+
+    // ── Multi-playhead (v0.2.0) ────────────────────────────────────────────
+    // Deal this grain to the next of N playheads (round robin). Head h reads the
+    // SAME buffer, offset in position and transposed by h·HeadTune. At
+    // HeadSpread = 1 the heads sit evenly distributed across the whole buffer.
+    // heads <= 1 short-circuits to the single-head path (bit-identical to v0.1.18)
+    // and costs nothing per sample — this is spawn-time only.
+    int   head    = 0;
+    float headOff = 0.0f;      // position offset, in normalised buffer units
+    if (heads > 1) {
+        head = mHeadCycle % heads;
+        mHeadCycle = (mHeadCycle + 1) % heads;
+        headOff = (float(head) * headSpread) / float(heads);
+    }
 
     const float overlap  = (hopSamples > 0.0f) ? float(grainDuration) / hopSamples : 1.0f;
     const float densComp = (overlap > 1.0f) ? (1.0f / sqrtf(overlap)) : 1.0f;
@@ -248,23 +292,110 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
     // edge-fade guards the collision. Playhead is a DELAY-TIME control in live mode:
     //   0 → freshest feedback (one grain-length back) = tightest regeneration
     //   1 → longest delay (most of the ring)          = long echo / smear
+    float headGap = 0.0f;   // spacing between adjacent playheads (Snap lane width)
     float basePos;
     if (liveMode) {
         const float minDelay = float(grainDuration);
         const float maxDelay = float(kCapBufSize - grainDuration);
         const float delay    = minDelay + playhead * (maxDelay - minDelay);
         basePos = float(mCapWrite) - delay;   // negative is fine: readSrc masks the ring
+        // Head offset = further back in the ring (older material per head), scaled
+        // into the ROOM remaining behind the knob position (v0.2.1). Scaling by the
+        // full span let delay + offset exceed maxDelay near playh 1 — the ring mask
+        // then wrapped an "older" head onto the FRESHEST material, right in the
+        // write-head collision zone, and head order scrambled. With `room`, heads
+        // always fit, order stays monotonic, and spacing shrinks gracefully to
+        // stacked at playh = 1 (the same state HeadSpread ≈ 0 means).
+        const float room = maxDelay - delay;
+        basePos -= headOff * room;
+        headGap  = (heads > 1) ? (headSpread / float(heads)) * room : 0.0f;
+    } else if (srcLive) {
+        // Sample-mode REGEN grain (v0.2.2): tight anchor just behind the write
+        // head, where the freshly reinjected wet output lives — the same
+        // "freshest feedback" position live mode uses at playh 0. Playhead
+        // stays the SAMPLE position control; head offsets don't apply (the
+        // head's pitch transpose still does, so regen grains join the chord).
+        // The 4800-sample margin keeps posJtr's bipolar spray (±4800·posJtr)
+        // behind the write head; the seam fade guards the rest.
+        basePos = float(mCapWrite) - float(grainDuration) - 4800.0f;
     } else {
-        basePos = playhead * float(sampleCount > 1 ? sampleCount - 1 : 0);
+        const float span = float(sampleCount > 1 ? sampleCount - 1 : 0);
+        basePos = playhead * span + headOff * span;
+        if (sampleCount > 0)                  // wrap the head offset into the sample
+            basePos -= float(sampleCount) * floorf(basePos / float(sampleCount));
+        headGap  = (heads > 1) ? (headSpread / float(heads)) * span : 0.0f;
     }
 
     float psprdSemi = (psprd > 0.0f) ? (randBipolar() * psprd) : 0.0f;
     if (scaleSel > 0) psprdSemi = snapToScale(psprdSemi, scaleSel);   // quantize scatter to a scale
-    const float semis     = semiShift + psprdSemi;
+    // Head transpose: heads stack in intervals (HeadTune = 7 → root, +7, +14 …).
+    const float semis     = semiShift + psprdSemi + float(head) * headTune;
     const float incL      = expf(kLog2Over12 * semis);   // 2^(semis/12), matches detuneRatio
 
     const float jit      = (posJtr > 0.0f) ? (posJtr * 4800.0f * randBipolar()) : 0.0f;
-    const float startPos = basePos + jit;
+    float       startPos = basePos + jit;
+
+    // ── SNAP: onset-locked spawning (v0.2.0) ───────────────────────────────
+    // Normally a grain reads wherever the metronome puts it, so granulating
+    // rhythmic material lands in the gaps as often as on the hits. Snap scans a
+    // window around the target for the strongest ENERGY RISE (a transient) and
+    // pulls the read there: 0 = free (classic), 1 = locked to the nearest onset.
+    // Same cheap spawn-time buffer peek Compress uses — no per-sample cost.
+    //
+    // BUDGET (v0.2.1): the search is 360 source reads (3 stages × 12 candidates ×
+    // 10 taps); worst-case spawn rate (64-sample grains at overlap 16 ≈ 12k/s)
+    // made that ~4.3M reads/s — a CPU spike in exactly the short-grain case where
+    // snapping is inaudible anyway (grains shorter than the transient). At most
+    // kSnapPerBlock searches run per block; grains past the budget spawn unsnapped
+    // for that block. Musical densities (a few spawns per block) never hit the cap.
+    // NOTE: per-spawn (not cached per block) is deliberate — posJtr sprays each
+    // grain to a different region and Snap reels each onto a DIFFERENT hit; a
+    // shared cached result would collapse that variety (README quick start #7).
+    if (snap > 0.0001f && mSnapBudget > 0) {
+        --mSnapBudget;
+        // COARSE → FINE search. Each stage tests kCand positions across a window,
+        // then the next stage re-searches a window one grid-step wide around the
+        // winner. Three stages of 12 give ~30-sample resolution over ±75 ms for
+        // the cost of 36 probes — a flat grid that fine would need 240.
+        const int   kCand  = 12;
+        const int   kTaps  = 5;                     // energy taps either side
+        const float kStep  = 40.0f;                 // tap spacing (samples) → ±200 window
+        float       win    = 3600.0f;               // ±75 ms, shrinks each stage
+        // Keep each head in its OWN lane. Without this the ±75 ms window is wider
+        // than the head spacing at moderate HeadSpread, so heads wander onto each
+        // other's transients and the position ladder collapses into clusters.
+        // Below kMinLane the heads are effectively stacked anyway — let them
+        // converge on a shared onset (that's what HeadSpread ≈ 0 is for).
+        const float kMinLane = 400.0f;
+        if (headGap > 0.0f) {
+            const float lane = headGap * 0.5f;
+            if (lane >= kMinLane && lane < win) win = lane;
+        }
+        float bestPos = startPos, bestScore = -1e30f;
+        for (int stage = 0; stage < 3; ++stage) {
+            const float centre = bestPos;
+            float stagePos = centre, stageScore = -1e30f;
+            for (int c = 0; c < kCand; ++c) {
+                const float f    = (float(c) / float(kCand - 1)) * 2.0f - 1.0f;   // -1..+1
+                float       cand = centre + win * f;
+                if (!srcLive && sampleCount > 0)    // keep the probe inside the sample
+                    cand -= float(sampleCount) * floorf(cand / float(sampleCount));
+                float after = 0.0f, before = 0.0f;
+                for (int k = 1; k <= kTaps; ++k) {
+                    const float a = readSrc(cand + float(k) * kStep, srcLive, sampleCount);
+                    const float b = readSrc(cand - float(k) * kStep, srcLive, sampleCount);
+                    after  += a * a;
+                    before += b * b;
+                }
+                const float score = after - before; // positive = rising edge
+                if (score > stageScore) { stageScore = score; stagePos = cand; }
+            }
+            bestScore = stageScore; bestPos = stagePos;
+            win *= 2.0f / float(kCand - 1);         // next window = one grid step
+        }
+        if (bestScore > 0.0f)                       // only pull toward a real rise
+            startPos += snap * (bestPos - startPos);
+    }
 
     // ── Per-grain leveling ("compression") ─────────────────────────────────
     // Peek the source where this grain will read, estimate its level, and apply a
@@ -277,9 +408,9 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
         float sum = 0.0f;
         for (int k = 0; k < nPeek; ++k) {
             float pp = startPos + span * (float(k) / float(nPeek - 1));
-            if (!liveMode && sampleCount > 0)         // wrap to match the grain's read
+            if (!srcLive && sampleCount > 0)          // wrap to match the grain's read
                 pp -= float(sampleCount) * floorf(pp / float(sampleCount));
-            const float sv = readSrc(pp, liveMode, sampleCount);
+            const float sv = readSrc(pp, srcLive, sampleCount);
             sum += sv * sv;
         }
         const float localRMS = sqrtf(sum / float(nPeek));
@@ -296,7 +427,7 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
     g.envIncr    = envIncr;
     g.envTex     = mCurTexture;   // capture Texture for this grain's life (no mid-grain jump)
     g.reverse    = reverseProb;   // per-spawn reverse decision (computed at call site)
-    g.live       = liveMode;
+    g.live       = srcLive;   // v0.2.2: regen grains read the ring in sample mode
     g.pitchIncrL = incL;
     g.pitchIncrR = incL * detuneRatio;
     g.scale      = scale;
@@ -333,11 +464,26 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
         g.stereo = detuned;
     }
 
+    // ── COLOR (v0.2.2): per-grain cutoff scatter — the spectral Psprd ───────
+    // Each grain draws a random low-pass cutoff, log-uniform from 20 kHz down to
+    // ~600 Hz at Color = 1, so dark and bright grains interleave in one cloud.
+    // Reuses the binaural head-shadow one-pole per ear (min-combine keeps the
+    // darker of shadow vs colour). Render cost is the already-gated LP path;
+    // Color 0 = bit-identical.
+    if (color > 0.0001f) {
+        const float u  = randUnipolar();
+        const float fc = 20000.0f * expf(-3.5f * color * u);   // 20 kHz → ~600 Hz
+        const float aC = 1.0f - expf(-kTwoPi * fc / float(kSampleRate));
+        if (g.lpAlphaL > aC) g.lpAlphaL = aC;
+        if (g.lpAlphaR > aC) g.lpAlphaR = aC;
+    }
+
+
     g.readPosL   = startPos - delayL;  g.readPos0L = g.readPosL;
     g.readPosR   = startPos - delayR;  g.readPos0R = g.readPosR;
 
     g.startDelay = sampleOffset;
-    g.pitchSemi  = semiShift + psprdSemi;
+    g.pitchSemi  = semis;   // includes the head transpose → heads stack in the field viz
     g.active     = true;
 }
 
@@ -381,20 +527,36 @@ void Dirac::process()
     const float semiShift= std::max(-kMaxTranspose,
                              std::min(semiKnob + voct * kVoctToSemis, kMaxTranspose));
     const float speed    = std::max(-4.0f, std::min(mSpeedIn.buffer()[0],  4.0f));
+    // Multi-playhead (v0.2.0). heads = 1 → single-head path, bit-identical.
+    // The Playheads option (menu) hard-bypasses the feature when Off, so a stray
+    // Heads CV can't engage it and the spawn path stays on the classic branch.
+    const bool  multiHead  = (mMultiHeadOpt.value() >= 2);
+    const int   heads      = multiHead
+                           ? std::max(1, std::min(int(mHeadsIn.buffer()[0] + 0.5f), kMaxHeads))
+                           : 1;
+    const float headSpread = std::max(0.0f, std::min(mHeadSpreadIn.buffer()[0], 1.0f));
+    const float headTune   = std::max(-12.0f, std::min(mHeadTuneIn.buffer()[0], 12.0f));
+    const float snap       = std::max(0.0f, std::min(mSnapIn.buffer()[0],  1.0f));
+    const float color      = std::max(0.0f, std::min(mColorIn.buffer()[0], 1.0f));
     const float grainLenSec = std::max(0.001f, std::min(mGrainLenIn.buffer()[0],
                                        float(kMaxGrainSamp) / float(kSampleRate)));
     const int   grainDuration = std::max(64, std::min(int(grainLenSec * float(kSampleRate)),
                                                       kMaxGrainSamp));
     const float *fireBuf = mFireIn.buffer();
 
-    // ── Capture live input (+ feedback reinjection) into the ring ──────────
-    // Feedback is a LIVE-mode feature (grains read the ring only in live mode), so
-    // the whole feedback path is gated on liveMode — in sample mode the ring keeps
-    // capturing plain input (warm for detach) but pays no tanh/mix cost.
+    // ── Capture into the ring (+ feedback reinjection) ─────────────────────
+    // v0.2.2: feedback now reinjects in BOTH modes. Live mode: grains read the
+    // ring, so feedback regenerates by construction. Sample mode: the ring is the
+    // REGENERATION BED — wet output is written here and a feedback-sized share of
+    // grains reads it instead of the sample (see spawnGrain). With feedback at 0
+    // the ring captures plain input (warm for detach) and pays no tanh/mix cost.
+    // Freeze (menu, v0.2.2) stops ALL writes: the ring locks while every control
+    // stays live — the source freezes, not the cloud (that's Hold).
     // Ring advance uses the power-of-two mask (kCapBufSize), not a compare-branch.
-    {
+    const bool frozen = (mFreezeOpt.value() >= 2);
+    if (!frozen) {
         const float *in = mIn.buffer();
-        if (liveMode && feedback > 0.0001f) {
+        if (feedback > 0.0001f) {
             for (int s = 0; s < blockSize; ++s) {
                 mCapBuf[mCapWrite] = sanitize(in[s] + feedback * mFeedBuf[s]);
                 mCapWrite = (mCapWrite + 1) & (kCapBufSize - 1);
@@ -443,6 +605,7 @@ void Dirac::process()
     const float hopSamples = freeRun ? (float(grainDuration) / overlap) : float(grainDuration);
 
     // ── Spawn scheduling: free-run at the density + trig edges (decoupled) ──
+    mSnapBudget = kSnapPerBlock;   // v0.2.1: bound the per-block Snap search cost
     if (freeRun) {
         mSpawnTimer -= float(blockSize);
         while (mSpawnTimer <= 0.0f) {
@@ -451,7 +614,8 @@ void Dirac::process()
             if (spawnAt >= blockSize) spawnAt = blockSize - 1;
             spawnGrain(playheadEff, sampleCount, posJtr, sprd, detune, level,
                        (revprob > 0.0f) && (randUnipolar() < revprob), psprd, grains,
-                       holdOn, semiShift, grainDuration, hopSamples, spawnAt, liveMode, compress, binaural, scale);
+                       holdOn, semiShift, grainDuration, hopSamples, spawnAt, liveMode, compress, binaural, scale,
+                       heads, headSpread, headTune, snap, feedback, color);
             mSpawnTimer += hopSamples;
         }
     } else {
@@ -463,7 +627,8 @@ void Dirac::process()
             if (fireBuf[s] > 0.5f && last <= 0.5f) {
                 spawnGrain(playheadEff, sampleCount, posJtr, sprd, detune, level,
                            (revprob > 0.0f) && (randUnipolar() < revprob), psprd, grains,
-                           holdOn, semiShift, grainDuration, hopSamples, s, liveMode, compress, binaural, scale);
+                           holdOn, semiShift, grainDuration, hopSamples, s, liveMode, compress, binaural, scale,
+                           heads, headSpread, headTune, snap, feedback, color);
             }
             last = fireBuf[s];
         }
@@ -494,7 +659,8 @@ void Dirac::process()
         const float envInc = g.envIncr;   // hoisted: g.* float loads can alias out-buffer stores
         const float lpAL = g.lpAlphaL, lpAR = g.lpAlphaR;   // head-shadow LP (1 = transparent)
         float lpL = g.lpStateL, lpR = g.lpStateR;
-        const bool doShadow = (lpAL < 0.9999f) || (lpAR < 0.9999f);   // binaural head-shadow engaged?
+        // Binaural head-shadow or Color engaged?
+        const bool doShadow = (lpAL < 0.9999f) || (lpAR < 0.9999f);
         // This grain's envelope = blend of two static shape tables by its captured
         // Texture (perc→Hann below 0.5, Hann→Tukey above). Selected once per grain.
         // At an exact node (Texture 0 or the 0.5 default) ew == 0 → skip the second
@@ -612,13 +778,48 @@ void Dirac::process()
         }
     }
 
+    // ── Diffuse (v0.2.2, menu option): wet-path allpass halo ────────────────
+    // 4 cascaded Schroeder allpasses per channel (mutually-prime delays, L ≠ R
+    // for stereo decorrelation, ~49 ms total path) smear grain edges into a
+    // lush tail — the Clouds-style halo. Runs BEFORE the feedback tap so
+    // regeneration is diffused too (tanh still bounds the loop). Off = hard
+    // bypass (bit-identical), and the delay lines clear on Off so re-enabling
+    // never replays a stale tail. Inputs are sanitized so a NaN can never
+    // poison the delay lines; the final output stage sanitizes again anyway.
+    if (mDiffuseOpt.value() >= 2) {
+        for (int s = 0; s < blockSize; ++s) {
+            float xl = sanitize(outL[s]), xr = sanitize(outR[s]);
+            for (int k = 0; k < kApStages; ++k) {
+                { const int j = mApIdxL[k]; const float z = mApBufL[k][j];
+                  const float y = z - kApGain * xl;
+                  mApBufL[k][j] = xl + kApGain * y;
+                  if (++mApIdxL[k] >= kApSizeL[k]) mApIdxL[k] = 0;
+                  xl = y; }
+                { const int j = mApIdxR[k]; const float z = mApBufR[k][j];
+                  const float y = z - kApGain * xr;
+                  mApBufR[k][j] = xr + kApGain * y;
+                  if (++mApIdxR[k] >= kApSizeR[k]) mApIdxR[k] = 0;
+                  xr = y; }
+            }
+            outL[s] = xl; outR[s] = xr;
+        }
+        mDiffusePrimed = true;
+    } else if (mDiffusePrimed) {
+        for (int k = 0; k < kApStages; ++k) {
+            std::fill(mApBufL[k].begin(), mApBufL[k].end(), 0.0f);
+            std::fill(mApBufR[k].begin(), mApBufR[k].end(), 0.0f);
+            mApIdxL[k] = 0; mApIdxR[k] = 0;
+        }
+        mDiffusePrimed = false;
+    }
+
     // ── Feedback source: soft-clipped wet mono (tanh keeps regeneration stable) ──
     // `drive` is a makeup gain INSIDE the tanh: the round-trip loses ~8 dB (densComp +
     // mono-sum + envelope average), so without it the loop never sustains even at
     // feedback≈1. Driving the tanh recovers that so feedback approaches unity loop gain
     // near 1.0; tanh still bounds mFeedBuf to [-1,1] → saturates into a stable drone,
     // no runaway. Host-tuned: 0=silent, ~0.8=clear tail, ~1=stable drone.
-    if (liveMode && feedback > 0.0001f) {
+    if (feedback > 0.0001f && !frozen) {
         const float drive = 2.5f;
         for (int s = 0; s < blockSize; ++s)
             mFeedBuf[s] = sanitize(tanhf(drive * 0.5f * (outL[s] + outR[s])));

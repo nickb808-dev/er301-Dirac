@@ -83,8 +83,14 @@ function Dirac:onLoadGraph(channelCount)
   self:addMonoBranch("voct", tune, "In", tune, "Out")
   param(self, head, "grainlen",  "GrainLen",  0.050)   -- seconds (50 ms)
   param(self, head, "speed",     "Speed",     0.0)     -- playhead scan rate; 0 = parked (sample mode)
+  -- Multi-playhead (v0.2.0). heads = 1 is the classic single-head path.
+  param(self, head, "heads",      "Heads",      1.0)   -- playhead count [1,4]
+  param(self, head, "headspread", "HeadSpread", 0.0)   -- position offset between heads
+  param(self, head, "headtune",   "HeadTune",   0.0)   -- pitch interval between heads (st)
+  param(self, head, "snap",      "Snap",      0.0)     -- pull grain starts onto transients
+  param(self, head, "color",     "Color",     0.0)     -- per-grain cutoff scatter (v0.2.2)
   param(self, head, "mix",       "Mix",       1.0)     -- wet/dry (live mode only); 1 = all wet
-  param(self, head, "feedback",  "Feedback",  0.0)     -- output→capture reinjection (live mode)
+  param(self, head, "feedback",  "Feedback",  0.0)     -- regen: ring reinjection (both modes, v0.2.2)
   param(self, head, "compress",  "Compress",  0.0)     -- per-grain leveling toward a target
   param(self, head, "binaural",  "Binaural",  0.0)     -- 3D depth: ITD + head-shadow
   param(self, head, "scale",     "Scale",     0.0)     -- quantize Psprd to a scale (0=off)
@@ -135,6 +141,104 @@ function Dirac:showWaveform(show)
   end
 end
 
+-- Multi-playhead controls (v0.2.0) are OFF by default to keep the default strip
+-- short; the Playheads menu option adds/removes them, mirroring showWaveform.
+local kHeadControls = { "heads", "headspread", "headtune" }
+
+local function headInView(self, name)
+  local view = self:getView("expanded")
+  if not view then return nil, nil end
+  for i, c in ipairs(view.controls) do
+    if c == self.controls[name] then return view, i end
+  end
+  return view, nil
+end
+
+function Dirac:showHeads(show)
+  if not self.controls then return end
+  local changed = false
+  for _, name in ipairs(kHeadControls) do
+    if self.controls[name] then
+      local view, idx = headInView(self, name)
+      if show and view and idx == nil then
+        self:placeControl(name, "expanded")     -- append to the strip
+        changed = true
+      elseif (not show) and view and idx ~= nil then
+        table.remove(view.controls, idx)
+        changed = true
+      end
+    end
+  end
+  if changed and self.currentViewName == "expanded" then
+    require("Application").postTrigger(self, "rebuildView")
+  end
+end
+
+-- ── Mode-dependent controls (v0.2.0) ────────────────────────────────────────
+-- Three controls are HARD-GATED in the DSP by source mode, so in the wrong mode
+-- they are knobs that visibly move and do nothing — which reads as a bug. Hide
+-- them instead. (Dirac.cpp: mix `if (liveMode && mix < 0.99995f)`, speed inside
+-- `if (!liveMode)`.) v0.2.2: feedback now regenerates in BOTH modes (sample mode
+-- spawns ring-reading grains), so it stays in the strip everywhere.
+local kLiveOnlyControls   = { "mix" }               -- dead once a sample is attached
+local kSampleOnlyControls = { "speed" }             -- dead in live mode
+
+-- Forward declaration: the canonical strip order is built further down (it needs
+-- controlOrder, which is defined with the views). It must be declared HERE so
+-- showModeControls closes over the local rather than a nil global.
+local kExpandedOrder
+
+-- Generic "is this control currently in the expanded strip?" (headInView with the
+-- name generalised — same contract, returns the RAW view.controls index).
+local function controlInView(self, name)
+  local view = self:getView("expanded")
+  if not view then return nil, nil end
+  local control = self.controls and self.controls[name]
+  if not control then return view, nil end
+  for i, c in ipairs(view.controls) do
+    if c == control then return view, i end
+  end
+  return view, nil
+end
+
+-- Where should `name` go when we put it BACK? placeControl takes a user-facing
+-- position (it adds +2 internally to skip the insert and header entries), so
+-- count how many of its canonical predecessors are currently placed. Without
+-- this, a re-shown control lands at the end of the strip and the order scrambles.
+local function orderedPosition(self, name, canonical)
+  local pos = 0
+  for _, other in ipairs(canonical) do
+    if other == name then break end
+    local _, idx = controlInView(self, other)
+    if idx then pos = pos + 1 end
+  end
+  return pos + 1
+end
+
+function Dirac:showModeControls(live)
+  if not self.controls then return end
+  local changed = false
+  local function apply(list, want)
+    for _, name in ipairs(list) do
+      local view, idx = controlInView(self, name)
+      if view then
+        if want and idx == nil then
+          self:placeControl(name, "expanded", orderedPosition(self, name, kExpandedOrder))
+          changed = true
+        elseif (not want) and idx ~= nil then
+          table.remove(view.controls, idx)
+          changed = true
+        end
+      end
+    end
+  end
+  apply(kLiveOnlyControls, live)
+  apply(kSampleOnlyControls, not live)
+  if changed and self.currentViewName == "expanded" then
+    require("Application").postTrigger(self, "rebuildView")
+  end
+end
+
 function Dirac:setSample(sample)
   if self.sample then self.sample:release(self); self.sample = nil end
   if sample == nil or sample:getChannelCount() == 0 then
@@ -146,6 +250,7 @@ function Dirac:setSample(sample)
   end
   if self.sampleEditor then self.sampleEditor:setSample(sample) end
   self:showWaveform(self.sample ~= nil)
+  self:showModeControls(self.sample == nil)
   self:notifyControls("setSample", sample)
 end
 
@@ -191,7 +296,8 @@ function Dirac:showSampleEditor()
   end
 end
 
-local menu = { "sampleHeader", "selectFromCard", "selectFromPool", "detachBuffer", "editSample" }
+local menu = { "sampleHeader", "selectFromCard", "selectFromPool", "detachBuffer", "editSample",
+               "playheads", "diffuse", "freeze" }
 
 function Dirac:onShowMenu(objects, branches)
   local controls = {}
@@ -205,6 +311,32 @@ function Dirac:onShowMenu(objects, branches)
   controls.editSample = Task { description = "Edit Buffer",
     task = function() self:showSampleEditor() end }
 
+  -- Multi-playhead (v0.2.0): off by default. Turning it on reveals the three
+  -- head controls in the strip; off hides them AND hard-bypasses the DSP path.
+  controls.playheads = OptionControl {
+    description = "Playheads",
+    option      = objects.head:getOption("Playheads"),
+    choices     = { "single", "multi" },
+    descriptionWidth = 2,
+    onUpdate    = function() self:showHeads(objects.head:getOption("Playheads"):value() >= 2) end,
+  }
+
+  -- Diffuse (v0.2.2): wet-path allpass halo, off by default (hard-bypassed).
+  controls.diffuse = OptionControl {
+    description = "Diffuse",
+    option      = objects.head:getOption("Diffuse"),
+    choices     = { "off", "on" },
+    descriptionWidth = 2,
+  }
+  -- Freeze (v0.2.2): stops WRITING the capture ring. Hold freezes the CLOUD;
+  -- Freeze freezes the SOURCE — all controls stay live over the locked buffer.
+  controls.freeze = OptionControl {
+    description = "Capture",
+    option      = objects.head:getOption("Freeze"),
+    choices     = { "run", "freeze" },
+    descriptionWidth = 2,
+  }
+
   local sub = {}
   if self.sample then
     sub[1] = { position = app.GRID5_LINE1, justify = app.justifyLeft, text = "Attached Sample:" }
@@ -216,6 +348,15 @@ function Dirac:onShowMenu(objects, branches)
     sub[1] = { position = app.GRID5_LINE3, justify = app.justifyCenter, text = "No sample attached." }
   end
   return controls, menu, sub
+end
+
+-- Sync the head controls to the (preset-restored) Playheads option once the
+-- views exist, so reloading a patch saved in "multi" brings the controls back.
+function Dirac:onLoadFinished()
+  self:showHeads(self.objects.head:getOption("Playheads"):value() >= 2)
+  -- deserialize() only calls setSample() when the preset HAS a sample, so a
+  -- sample-less preset would never fire the mode hook. Reconcile here.
+  self:showModeControls(self.sample == nil)
 end
 
 function Dirac:onRemove()
@@ -236,7 +377,7 @@ end
 local controlOrder = {
   "trig", "hold", "semishift", "voct", "playhead", "speed", "grainlen", "grains", "rate",
   "posjtr", "spread", "detune",
-  "psprd", "scale", "texture", "compress", "revprob", "level", "mix", "feedback", "binaural",
+  "psprd", "scale", "texture", "color", "snap", "compress", "revprob", "level", "mix", "feedback", "binaural",
 }
 
 -- "wave" LEADS the expanded strip so the waveform is the default main display
@@ -251,12 +392,24 @@ local controlOrder = {
 -- point setSample() places it at the front of the strip (and removes it again
 -- on detach). Focused control views still reference "wave" so it appears when
 -- you drill into a position control.
+-- Dirac starts in LIVE mode (no sample), so the sample-only controls are absent
+-- from the default strip; setSample() places them when a sample is attached.
+-- They still get a focused view built here, exactly like the always-present ones.
+local hiddenAtStart = {}
+for _, name in ipairs(kSampleOnlyControls) do hiddenAtStart[name] = true end
+
 local views = { expanded = { "field" }, collapsed = {} }
 for _, name in ipairs(controlOrder) do
-  views.expanded[#views.expanded + 1] = name
+  if not hiddenAtStart[name] then views.expanded[#views.expanded + 1] = name end
   views[name] = { "wave", name }
 end
 views.field = { "wave", "field" }
+
+-- Canonical strip order used to re-insert a control at its proper slot.
+-- "wave" leads (placed at position 1 on sample attach), then "field", then the
+-- control order. Head controls are appended after everything, so they're absent.
+kExpandedOrder = { "wave", "field" }
+for _, name in ipairs(controlOrder) do kExpandedOrder[#kExpandedOrder + 1] = name end
 
 function Dirac:onLoadViews(objects, branches)
   local controls = {}
@@ -279,18 +432,29 @@ function Dirac:onLoadViews(objects, branches)
   -- negative = reverse; wraps at the sample ends. Touching playh re-seats the scan.
   gb("speed",    "speed", "Scan rate (0=park 1=tempo)", app.LinearDialMap(-4, 4), 0.0,
      app.LinearDialMap(-4, 4))
+  -- Multi-playhead (v0.2.0): N heads read the same buffer, dealt round-robin.
+  -- Heads steps in whole units (1..4) — grains are dealt to discrete heads and
+  -- the DSP rounds anyway; same integer-dial pattern as Grains/Semitone below.
+  local headsMap = app.LinearDialMap(1, 4);  headsMap:setCoarseRadix(3)
+  gb("heads",      "heads", "Playheads (1 = classic)", headsMap, 1.0,
+     app.LinearDialMap(-4, 4))
+  gb("headspread", "hsprd", "Head position offset", Encoder.getMap("[0,1]"), 0.0)
+  gb("headtune",   "htune", "Head interval (st)", app.LinearDialMap(-12, 12), 0.0,
+     app.LinearDialMap(-12, 12))
   gb("rate",     "dens",  "0 = trig only", app.LinearDialMap(0, 16), 3.0, app.LinearDialMap(-16, 16))
   gb("posjtr",   "posJtr","Position jitter", Encoder.getMap("[0,1]"), 0.0)
   gb("spread",   "sprd",  "Stereo spread", Encoder.getMap("[0,1]"), 0.5)
   gb("detune",   "detun", "Stereo detune", app.LinearDialMap(0, 0.5), 0.0, app.LinearDialMap(-0.5, 0.5))
   gb("level",    "level", "Output level", Encoder.getMap("[0,1]"), 0.7)
   gb("mix",      "mix",   "Wet/dry (live)", Encoder.getMap("[0,1]"), 1.0)
-  gb("feedback", "fdbk",  "Regen (live)", Encoder.getMap("[0,1]"), 0.0)
+  gb("feedback", "fdbk",  "Regen (live+sample)", Encoder.getMap("[0,1]"), 0.0)
   gb("compress", "comp",  "Grain leveling", Encoder.getMap("[0,1]"), 0.0)
   gb("binaural", "bin",   "Binaural", Encoder.getMap("[0,1]"), 0.0)
   gb("revprob",  "rev",   "Reverse probability", Encoder.getMap("[0,1]"), 0.0)
   gb("psprd",    "psprd", "Pitch scatter (st)", app.LinearDialMap(0, 12), 0.0, app.LinearDialMap(-12, 12))
   gb("texture",  "textr", "Perc>Hann>Tukey", Encoder.getMap("[0,1]"), 0.5)
+  gb("snap",     "snap",  "Lock grains to onsets", Encoder.getMap("[0,1]"), 0.0)
+  gb("color",    "color", "Cutoff scatter: bright-dark", Encoder.getMap("[0,1]"), 0.0)
   -- Integer-stepping dials: Grains (1..16) and Semitone (−24..24) move in whole units.
   local grainsMap = app.LinearDialMap(1, 16);   grainsMap:setCoarseRadix(15)
   local semiMap   = app.LinearDialMap(-24, 24);  semiMap:setCoarseRadix(48)

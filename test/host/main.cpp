@@ -28,6 +28,9 @@ static void setInputs(Dirac &d, const Ctl *ctls, int n)
                          &d.mGrainsIn, &d.mFireIn, &d.mHoldIn, &d.mSemiShiftIn, &d.mGrainLenIn,
                          &d.mMixIn, &d.mFeedbackIn, &d.mCompressIn, &d.mBinauralIn, &d.mScaleIn,
                          &d.mVoctIn,
+                         &d.mHeadsIn, &d.mHeadSpreadIn, &d.mHeadTuneIn,
+                         &d.mSnapIn,
+                         &d.mColorIn,
 #ifdef HAS_SPEED
                          &d.mSpeedIn,
 #endif
@@ -75,7 +78,9 @@ int main(int argc, char **argv)
     if (argc < 2) { fprintf(stderr, "mode?\n"); return 2; }
 
     if (!strcmp(argv[1], "ident")) {
+        if (argc < 3) { fprintf(stderr, "ident: output path?\n"); return 2; }
         FILE *f = fopen(argv[2], "wb");
+        if (!f) { fprintf(stderr, "ident: cannot open %s\n", argv[2]); return 2; }
         std::vector<float> st;
         // A: sample mode, busy controls, feedback knob up (inert in sample mode pre/post — but
         //    pre-change it ran the tanh path; outputs must still match since ring is unread)
@@ -145,6 +150,26 @@ int main(int argc, char **argv)
             setInputs(d, c, sizeof(c)/sizeof(c[0]));
             run(d, 3000, nullptr, nullptr, &nf);
         }
+        // v0.2.2 torture: Color + Diffuse + sample-mode feedback + Snap +
+        // Hold all at once, tiny sample, freeze toggled mid-flight,
+        // detach with the diffuser running.
+        {
+            Dirac d; rng = 0x222;
+            od::Sample smp = makeSample(st, 20000, 1);
+            d.setSample(&smp);
+            d.mDiffuseOpt.set(2);
+            const Ctl c[] = {{"Playhead",0.9f},{"Rate",16.0f},{"Level",0.9f},{"Grains",16.0f},
+                             {"GrainLen",2.0f},{"Feedback",0.95f},{"Color",1.0f},
+                             {"SemiShift",24.0f},{"Detune",2.0f},{"Binaural",1.0f},{"Spread",1.0f},
+                             {"Hold",1.0f},{"Snap",1.0f},{"PosJtr",1.0f}};
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            run(d, 1500, nullptr, nullptr, &nf);
+            d.mFreezeOpt.set(2);                       // freeze mid-flight
+            run(d, 750, nullptr, nullptr, &nf);
+            d.mFreezeOpt.set(1);
+            d.setSample(nullptr);                      // detach with diffuser running
+            run(d, 750, nullptr, nullptr, &nf);
+        }
         printf("asan done, nonFinite=%d\n", nf);
         return nf ? 1 : 0;
     }
@@ -167,8 +192,300 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    if (!strcmp(argv[1], "fieldpos")) {
+        const int N = 48000, kPeriod = 4800;
+        std::vector<float> st(N, 0.0f);
+        for (int o = 0; o < N; o += kPeriod)
+            for (int i = 0; i < 200 && o + i < N; ++i)
+                st[o + i] = 0.9f * expf(-float(i)/40.0f) * ((i & 1) ? -1.0f : 1.0f);
+        od::Sample smp; smp.mSampleCount = N; smp.mChannelCount = 1; smp.mpData = st.data();
+        int bad = 0;
+        for (int pass = 0; pass < 2; ++pass) {
+            Dirac d; d.setSample(&smp);
+            Ctl c[] = {{"Playhead",0.25f},{"Rate",8.0f},{"GrainLen",0.02f},{"Grains",16.0f},
+                       {"Level",0.7f},{"PosJtr",1.0f},{"Texture",0.5f},
+                       {"Snap",pass?1.0f:0.0f}};
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            // Histogram the position axis into the 12 columns a 12px-wide panel has.
+            int hist[42] = {0}; int n = 0;
+            for (int b = 0; b < 400; ++b) {
+                d.process();
+                for (int i = 0; i < dirac::Dirac::kMaxGrains; ++i) {
+                    if (!d.isGrainActive(i)) continue;
+                    float p = d.getGrainReadPos01(i);
+                    if (!(p == p) || p < 0.0f || p > 1.0f) { bad++; continue; }
+                    hist[int(p * 41.999f)]++; n++;
+                }
+            }
+            // Occupancy concentration: fraction of hits in the busiest 3 columns.
+            int best3 = 0;
+            for (int k = 0; k + 2 < 42; ++k) {
+                const int sum3 = hist[k] + hist[k+1] + hist[k+2];
+                if (sum3 > best3) best3 = sum3;
+            }
+            printf("snap=%d n=%5d top3=%.2f [", pass, n,
+                   n ? float(best3) / float(n) : 0.0f);
+            for (int k = 0; k < 42; ++k) printf("%c", hist[k] == 0 ? '.' :
+                   (hist[k] > n/8 ? '#' : (hist[k] > n/24 ? '+' : '-')));
+            printf("]\n");
+        }
+        // The showcase: heads spread across the sample should read as COLUMNS.
+        for (float hs : {0.0f, 0.3f, 0.9f}) {
+            Dirac d; d.setSample(&smp); d.mMultiHeadOpt.set(2);
+            Ctl c[] = {{"Playhead",0.05f},{"Rate",8.0f},{"GrainLen",0.02f},{"Grains",16.0f},
+                       {"Level",0.7f},{"PosJtr",0.0f},{"Texture",0.5f},
+                       {"Heads",4.0f},{"HeadSpread",hs},{"HeadTune",1.0f},{"Snap",0.0f}};
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            int hist[42] = {0}; int n = 0;
+            for (int b = 0; b < 400; ++b) {
+                d.process();
+                for (int i = 0; i < dirac::Dirac::kMaxGrains; ++i) {
+                    if (!d.isGrainActive(i)) continue;
+                    float p = d.getGrainReadPos01(i);
+                    if (!(p == p) || p < 0.0f || p > 1.0f) { bad++; continue; }
+                    hist[int(p * 41.999f)]++; n++;
+                }
+            }
+            printf("hsprd=%.1f    [", hs);
+            for (int k = 0; k < 42; ++k) printf("%c", hist[k] == 0 ? '.' :
+                   (hist[k] > n/16 ? '#' : (hist[k] > n/48 ? '+' : '-')));
+            printf("]\n");
+        }
+        printf("fieldpos: %s (out-of-range=%d)\n", bad ? "FAIL" : "PASS", bad);
+        return bad ? 1 : 0;
+    }
+
+    if (!strcmp(argv[1], "headsnap")) {
+        const int N = 48000, kPeriod = 4800;
+        std::vector<float> st(N, 0.0f);
+        for (int o = 0; o < N; o += kPeriod)
+            for (int i = 0; i < 200 && o + i < N; ++i)
+                st[o + i] = 0.9f * expf(-float(i) / 40.0f) * ((i & 1) ? -1.0f : 1.0f);
+        od::Sample smp; smp.mSampleCount = N; smp.mChannelCount = 1; smp.mpData = st.data();
+
+        const float spreads[] = {0.02f, 0.10f, 0.50f};
+        for (float hs : spreads) {
+            for (int pass = 0; pass < 2; ++pass) {
+                Dirac d; d.setSample(&smp);
+                d.mMultiHeadOpt.set(2);
+                Ctl c[] = {{"Playhead",0.1f},{"Rate",8.0f},{"GrainLen",0.02f},{"Grains",16.0f},
+                           {"Level",0.7f},{"PosJtr",0.0f},{"Texture",0.5f},
+                           {"Heads",4.0f},{"HeadSpread",hs},{"HeadTune",1.0f},
+                           {"Snap",pass?1.0f:0.0f}};
+                setInputs(d, c, sizeof(c)/sizeof(c[0]));
+                double sum[4]={0,0,0,0}; int cnt[4]={0,0,0,0};
+                int onsetHit[4]={-1,-1,-1,-1};
+                bool seen[dirac::Dirac::kMaxGrains]={false};
+                for (int b = 0; b < 300; ++b) {
+                    d.process();
+                    for (int i = 0; i < dirac::Dirac::kMaxGrains; ++i) {
+                        if (d.isGrainActive(i) && !seen[i]) {
+                            seen[i]=true;
+                            int h = int(d.getGrainPitch(i) + 0.5f);   // headTune=1
+                            if (h < 0 || h > 3) continue;
+                            float p = d.getGrainSpawnPos(i);
+                            p -= float(N)*floorf(p/float(N));
+                            sum[h]+=p; cnt[h]++;
+                            onsetHit[h] = int(p/float(kPeriod)+0.5f) % (N/kPeriod);
+                        } else if (!d.isGrainActive(i)) seen[i]=false;
+                    }
+                }
+                printf("hsprd=%.2f snap=%d  ", hs, pass);
+                int distinct=0;
+                for (int h=0;h<4;++h) {
+                    printf("h%d=%7.0f ", h, cnt[h]?float(sum[h]/cnt[h]):-1.0f);
+                    bool dup=false;
+                    for (int k=0;k<h;++k) if (onsetHit[k]==onsetHit[h]) dup=true;
+                    if (!dup && onsetHit[h]>=0) distinct++;
+                }
+                printf(" distinct onsets=%d\n", distinct);
+            }
+        }
+        return 0;
+    }
+
+    if (!strcmp(argv[1], "snapt")) {
+        const int N = 48000, kPeriod = 4800;
+        std::vector<float> st(N, 0.0f);
+        for (int o = 0; o < N; o += kPeriod)            // 200-sample decaying click
+            for (int i = 0; i < 200 && o + i < N; ++i)
+                st[o + i] = 0.9f * expf(-float(i) / 40.0f) * ((i & 1) ? -1.0f : 1.0f);
+        od::Sample smp; smp.mSampleCount = N; smp.mChannelCount = 1; smp.mpData = st.data();
+
+        float means[2];
+        for (int pass = 0; pass < 2; ++pass) {
+            const float snap = pass ? 1.0f : 0.0f;
+            Dirac d; d.setSample(&smp);
+            Ctl c[] = {{"Playhead",0.25f},{"Rate",8.0f},{"GrainLen",0.02f},{"Grains",16.0f},
+                       {"Level",0.7f},{"PosJtr",1.0f},{"Texture",0.5f},{"Snap",snap}};
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            double acc = 0.0; int n = 0;
+            bool seen[dirac::Dirac::kMaxGrains] = {false};
+            for (int b = 0; b < 400; ++b) {
+                d.process();
+                for (int i = 0; i < dirac::Dirac::kMaxGrains; ++i) {
+                    if (d.isGrainActive(i) && !seen[i]) {
+                        seen[i] = true;
+                        float p = d.getGrainSpawnPos(i);
+                        p -= float(N) * floorf(p / float(N));
+                        float r = p - float(kPeriod) * floorf(p / float(kPeriod));
+                        if (r > kPeriod * 0.5f) r = float(kPeriod) - r;
+                        acc += r; n++;
+                    } else if (!d.isGrainActive(i)) seen[i] = false;
+                }
+            }
+            means[pass] = n ? float(acc / n) : -1.0f;
+            printf("snap=%.0f  grains=%d  mean|start-onset| = %.1f samples\n", snap, n, means[pass]);
+        }
+        const bool pass = (means[1] < means[0] * 0.6f);
+        printf("snapt: %s (snap pulls starts %.1fx closer to onsets)\n",
+               pass ? "PASS" : "FAIL", means[1] > 0 ? means[0] / means[1] : 0.0f);
+        return pass ? 0 : 1;
+    }
+
+
+    // ── colort: Color darkens the cloud (per-grain cutoff scatter) ──────────
+    // Sine+noise sample; metric = first-difference RMS over RMS (HF ratio).
+    if (!strcmp(argv[1], "colort")) {
+        std::vector<float> st; od::Sample smp = makeSample(st, 48000, 1);
+        float hf[2]; int nf = 0;
+        for (int pass = 0; pass < 2; ++pass) {
+            Dirac d; rng = 0x5eed; d.setSample(&smp);
+            Ctl c[] = {{"Playhead",0.3f},{"Rate",8.0f},{"GrainLen",0.05f},{"Grains",16.0f},
+                       {"Level",0.7f},{"Texture",0.5f},{"Color",pass?1.0f:0.0f}};
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            double num = 0.0, den = 0.0; float prev = 0.0f;
+            for (int b = 0; b < 800; ++b) { d.process();
+                float *L = d.mOutL.buffer();
+                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx) {
+                    if (!std::isfinite(L[sIdx])) nf++;
+                    const float df = L[sIdx] - prev;
+                    num += df * df; den += L[sIdx] * L[sIdx]; prev = L[sIdx]; } }
+            hf[pass] = (den > 0.0) ? float(sqrt(num / den)) : 0.0f;
+            printf("color=%d  HF ratio = %.4f\n", pass, hf[pass]);
+        }
+        const bool pass = (hf[1] < hf[0] * 0.85f) && nf == 0;
+        printf("colort: %s (%.2fx darker)\n", pass ? "PASS" : "FAIL",
+               hf[1] > 0 ? hf[0] / hf[1] : 0.0f);
+        return pass ? 0 : 1;
+    }
+
+    // ── difft: Diffuse spreads a click-grain in time, conserving energy ─────
+    if (!strcmp(argv[1], "difft")) {
+        const int N = 48000;
+        std::vector<float> st(N, 0.0f);
+        for (int i = 0; i < 400; ++i)
+            st[i] = 0.9f * expf(-float(i) / 60.0f) * ((i & 1) ? -1.0f : 1.0f);
+        od::Sample smp; smp.mSampleCount = N; smp.mChannelCount = 1; smp.mpData = st.data();
+        double spread[2], energy[2]; int nf = 0;
+        for (int pass = 0; pass < 2; ++pass) {
+            Dirac d; rng = 0xd1ff; d.setSample(&smp);
+            if (pass) d.mDiffuseOpt.set(2);
+            Ctl c[] = {{"Playhead",0.0f},{"Rate",0.0f},{"GrainLen",0.02f},{"Grains",1.0f},
+                       {"Level",0.9f},{"Texture",0.0f}};
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            // Fire on block 0, off after — and MEASURE the fire block too: the
+            // click grain dumps most of its energy there, and the diffuser
+            // delays that energy into later blocks (first difft version missed
+            // it in the dry pass and misread the smear as gain).
+            double e = 0.0, et = 0.0, ett = 0.0; long t = 0;
+            for (int b = 0; b < 400; ++b) {
+                Ctl fc[] = {{"Fire", (b == 0) ? 1.0f : 0.0f}};
+                setInputs(d, fc, 1);
+                d.process();
+                float *L = d.mOutL.buffer();
+                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx, ++t) {
+                    const float x = L[sIdx];
+                    if (!std::isfinite(x)) nf++;
+                    const double w = double(x) * x;
+                    e += w; et += w * t; ett += w * double(t) * t; } }
+            const double mean = (e > 0.0) ? et / e : 0.0;
+            spread[pass] = (e > 0.0) ? sqrt(std::max(0.0, ett / e - mean * mean)) : 0.0;
+            energy[pass] = e;
+            printf("diffuse=%d  temporal spread = %.0f samples  energy = %.4f\n",
+                   pass, spread[pass], energy[pass]);
+        }
+        const double eRatio = (energy[0] > 0.0) ? energy[1] / energy[0] : 0.0;
+        const bool pass = spread[1] > spread[0] * 2.0
+                       && eRatio > 0.7 && eRatio < 1.4 && nf == 0;
+        printf("difft: %s (spread x%.1f, energy x%.2f)\n", pass ? "PASS" : "FAIL",
+               spread[0] > 0 ? spread[1] / spread[0] : 0.0, eRatio);
+        return pass ? 0 : 1;
+    }
+
+    // ── freezet: Freeze locks the ring — the cloud survives silent input ────
+    if (!strcmp(argv[1], "freezet")) {
+        double late[2]; int nf = 0;
+        for (int pass = 0; pass < 2; ++pass) {          // 0 = running, 1 = frozen
+            Dirac d; rng = 0xf00d;
+            // Playhead 0 = tightest delay (one grain-length back), so grains sit
+            // inside the tone-filled span of the ring; 100 blocks of fill cover
+            // delay + grain length with margin.
+            Ctl c[] = {{"Playhead",0.0f},{"Rate",6.0f},{"GrainLen",0.1f},{"Grains",12.0f},
+                       {"Level",0.8f},{"Texture",0.5f},{"Mix",1.0f}};
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            for (int b = 0; b < 100; ++b) {             // fill the ring with tone
+                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx)
+                    d.mIn.buffer()[sIdx] = 0.5f * sinf(2.0f * 3.14159265f * 110.0f
+                                            * (b * FRAMELENGTH + sIdx) / 48000.0f);
+                d.process();
+            }
+            if (pass) d.mFreezeOpt.set(2);
+            double acc = 0.0; long n = 0;
+            for (int b = 0; b < 800; ++b) {             // input goes silent
+                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx) d.mIn.buffer()[sIdx] = 0.0f;
+                d.process();
+                float *L = d.mOutL.buffer();
+                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx) {
+                    if (!std::isfinite(L[sIdx])) nf++;
+                    if (b >= 400) { acc += double(L[sIdx]) * L[sIdx]; n++; } } }
+            late[pass] = n ? sqrt(acc / n) : 0.0;
+            printf("frozen=%d  late RMS = %.4f\n", pass, late[pass]);
+        }
+        const bool pass = late[1] > 10.0 * std::max(late[0], 1e-5) && nf == 0;
+        printf("freezet: %s\n", pass ? "PASS" : "FAIL");
+        return pass ? 0 : 1;
+    }
+
+    // ── sfbt: sample-mode feedback — regen grains sustain a tail ────────────
+    // SILENT sample: with fdbk 0 every grain reads silence (output 0); with
+    // fdbk 0.9 the ring (seeded by 20 blocks of live input) regenerates.
+    if (!strcmp(argv[1], "sfbt")) {
+        const int N = 48000;
+        std::vector<float> st(N, 0.0f);
+        od::Sample smp; smp.mSampleCount = N; smp.mChannelCount = 1; smp.mpData = st.data();
+        double late[2]; int nf = 0;
+        for (int pass = 0; pass < 2; ++pass) {
+            Dirac d; rng = 0x5fb7; d.setSample(&smp);
+            Ctl c[] = {{"Playhead",0.5f},{"Rate",8.0f},{"GrainLen",0.15f},{"Grains",16.0f},
+                       {"Level",0.9f},{"Texture",0.5f},{"Feedback",pass?0.9f:0.0f}};
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            for (int b = 0; b < 20; ++b) {              // seed the ring
+                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx)
+                    d.mIn.buffer()[sIdx] = 0.5f * sinf(2.0f * 3.14159265f * 220.0f
+                                            * (b * FRAMELENGTH + sIdx) / 48000.0f);
+                d.process();
+            }
+            double acc = 0.0; long n = 0;
+            for (int b = 0; b < 600; ++b) {
+                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx) d.mIn.buffer()[sIdx] = 0.0f;
+                d.process();
+                float *L = d.mOutL.buffer(), *R = d.mOutR.buffer();
+                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx) {
+                    if (!std::isfinite(L[sIdx]) || !std::isfinite(R[sIdx])) nf++;
+                    if (b >= 100) { acc += double(L[sIdx]) * L[sIdx]; n++; } } }
+            late[pass] = n ? sqrt(acc / n) : 0.0;
+            printf("sample-fdbk=%.1f  late RMS = %.5f\n", pass ? 0.9f : 0.0f, late[pass]);
+        }
+        const bool pass = late[1] > 20.0 * std::max(late[0], 1e-6)
+                       && late[1] < 10.0 && nf == 0;
+        printf("sfbt: %s\n", pass ? "PASS" : "FAIL");
+        return pass ? 0 : 1;
+    }
+
 #ifdef HAS_SPEED
     if (!strcmp(argv[1], "speed")) {
+        if (argc < 3) { fprintf(stderr, "speed: rate argument?\n"); return 2; }
         // Ramp sample (sample[i] = i/count): windowed mean |out| tracks the scan
         // position directly. 2 s sample; report 0.25 s windows over 5 s.
         const float spd = float(atof(argv[2]));

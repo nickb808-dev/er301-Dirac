@@ -70,8 +70,39 @@ public:
     od::Inlet  mScaleIn     {"Scale"};      // quantize Psprd scatter to a scale (0 = off)
     od::Inlet  mVoctIn      {"V/Oct"};      // 1 V/oct pitch CV, summed with SemiShift
     od::Inlet  mSpeedIn     {"Speed"};      // playhead scan rate [-4,4]; 0 = parked (v0.1.18)
+    // ── Multi-playhead (v0.2.0) ────────────────────────────────────────────
+    // Grains are dealt round-robin to N playheads reading the SAME buffer at
+    // different positions and pitches.  Heads = 1 is bit-identical to v0.1.18.
+    // Multi-playhead is OFF by default so the strip stays uncluttered; the option
+    // hard-bypasses the feature (heads forced to 1) regardless of the inlets.
+    //   1 = Off (default) · 2 = On
+    od::Option mMultiHeadOpt {"Playheads", 1};
+
+    od::Inlet  mHeadsIn     {"Heads"};      // playhead count [1, kMaxHeads]
+    od::Inlet  mHeadSpreadIn{"HeadSpread"}; // position offset between heads [0,1]
+    od::Inlet  mHeadTuneIn  {"HeadTune"};   // pitch interval between heads [-12,+12] st
+    // ── Snap (v0.2.0) ──────────────────────────────────────────────
+    od::Inlet  mSnapIn      {"Snap"};       // pull grains onto transients [0,1]
+    // ── v0.2.2 ─────────────────────────────────────────────────────────────
+    // Color: per-grain LOW-PASS CUTOFF SCATTER (the spectral analog of Psprd).
+    // Each grain draws a random cutoff, darker with Color — dark and bright
+    // grains interleave in one cloud. Reuses the binaural head-shadow one-pole
+    // (min-combined per ear), so render cost is the already-gated LP path.
+    od::Inlet  mColorIn     {"Color"};      // cutoff scatter depth [0,1]; 0 = off
+    // Diffuse (menu option, 1 = Off · 2 = On): 4 cascaded Schroeder allpasses
+    // per channel on the WET path (before the feedback tap, so regeneration is
+    // diffused too — the Clouds-style halo). Hard-bypassed when Off.
+    od::Option mDiffuseOpt  {"Diffuse", 1};
+    // Freeze (menu option, 1 = Run · 2 = Freeze): stops WRITING the capture
+    // ring. Distinct from Hold: Hold freezes the CLOUD, Freeze freezes the
+    // SOURCE — every control stays live over the locked 2.7 s.
+    od::Option mFreezeOpt   {"Freeze", 1};
 
     /* ── Grain-field / head-display accessors ──────────────────────────── */
+    // kMaxGrains is public so the host harness (test/host/main.cpp) can size
+    // arrays with it at compile time; everything else in this block is the
+    // supported read-only surface the viz and the harness share.
+    static constexpr int kMaxGrains = 16;
     int   getGrainCount()         const { return kMaxGrains; }
     bool  isGrainActive(int i)    const { return mGrains[i].active; }
     int   getGrainSrcIndex(int i) const { return mGrains[i].srcIndex; }
@@ -85,13 +116,36 @@ public:
     float getGrainPan(int i)      const { return mGrains[i].panPos; }     // stereo position [-1,1]
     float getGrainPitch(int i)    const { return mGrains[i].pitchSemi; }  // transpose in semitones
     int   getGrainDuration(int i) const { return mGrains[i].duration; }   // samples (mark length)
+    // Where this grain is reading in the SOURCE, normalised to [0,1] — the
+    // alternate X axis for the grain field (v0.2.0). Live: 0 = oldest material in
+    // the ring, 1 = the write head (now). Sample: 0 = start, 1 = end. This is the
+    // live read position, not the spawn position, so grains visibly drift as they
+    // play (and reverse grains drift backwards).
+    float getGrainReadPos01(int i) const {
+        const float p = mGrains[i].readPosL;
+        if (mpSample && mEndIndex > 0) {                    // sample mode
+            const float n = float(mEndIndex);
+            float q = p - n * floorf(p / n);                 // wrap into [0,n)
+            return q / n;
+        }
+        const float n = float(kCapBufSize);                 // live ring
+        float age = float(mCapWrite) - p;                   // samples behind the write head
+        age -= n * floorf(age / n);                         // wrap into [0,n)
+        return 1.0f - age / n;                              // 1 = newest
+    }
     float getVizSpread()          const { return mVizSprd; }
     float getVizDetune()          const { return mVizDetune; }
+    float getVizTexture()         const { return mCurTexture; }   // glyph shape (v0.2.0)
+    // Harness-facing accessors (v0.2.0): spawn read position + current pan
+    // gains, so the host tests don't need to reach into private grain state.
+    float getGrainSpawnPos(int i) const { return mGrains[i].readPos0L; }
+    float getGrainGainL(int i)    const { return mGrains[i].gainL; }
+    float getGrainGainR(int i)    const { return mGrains[i].gainR; }
 
 private:
     /* ── Constants ─────────────────────────────────────────────────────── */
     static constexpr int   kSampleRate    = 48000;
-    static constexpr int   kMaxGrains     = 16;
+    static constexpr int   kMaxHeads      = 4;       // multi-playhead cap (v0.2.0)
     static constexpr int   kCapBufSize    = 131072;  // live capture ring ≈ 2.73 s (power of two)
     static constexpr int   kMaxGrainSamp  = 96000;   // grain length ceiling (2 s)
     static constexpr int   kEnvTableSize  = 1024;    // grain envelope table (read by phase)
@@ -159,6 +213,26 @@ private:
     // float lacks sample resolution on long samples.
     double mScanPos          = 0.0;    // normalized [0,1)
     float  mLastPlayheadKnob = -1.0f;  // reseat detector (knob touch re-seats scan)
+    int    mHeadCycle        = 0;      // round-robin dealer: next head to spawn on
+    // Snap search budget (v0.2.1): at most kSnapPerBlock coarse→fine onset
+    // searches per block; grains past it spawn unsnapped. Bounds the worst-case
+    // spawn-rate cost (~16×) without caching results across grains — per-grain
+    // searches are what make posJtr+Snap land on DIFFERENT hits.
+    static constexpr int kSnapPerBlock = 2;
+    int    mSnapBudget       = 0;
+
+    /* ── Diffuser (v0.2.2): 4 cascaded Schroeder allpasses per channel ───── */
+    // Delay lengths are mutually-prime, slightly different L vs R for stereo
+    // decorrelation (~49 ms total path). Fixed g — one knob of character, zero
+    // knobs of panel space. Buffers cleared when the option turns Off so
+    // re-enabling never replays a stale tail.
+    static constexpr int   kApStages = 4;
+    static constexpr int   kApSizeL[kApStages] = { 113, 337, 719, 1201 };
+    static constexpr int   kApSizeR[kApStages] = { 127, 347, 743, 1213 };
+    static constexpr float kApGain   = 0.6f;
+    std::vector<float> mApBufL[kApStages], mApBufR[kApStages];
+    int  mApIdxL[kApStages] = {0}, mApIdxR[kApStages] = {0};
+    bool mDiffusePrimed = false;   // buffers hold energy → clear once on Off
 
     /* ── PRNG ───────────────────────────────────────────────────────────── */
     uint32_t mRandState = 0x1234abcdu;
@@ -178,7 +252,9 @@ private:
                      float psprd, int grainsCap, bool held,
                      float semiShift, int grainDuration, float hopSamples,
                      int sampleOffset, bool liveMode, float compress, float binaural,
-                     int scaleSel);
+                     int scaleSel, int heads, float headSpread, float headTune,
+                     float snap,
+                     float feedback, float color);
     int   findSlot(int grainsCap);
 
 #endif // SWIGLUA

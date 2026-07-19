@@ -5,7 +5,7 @@ the audio, windowed, pitched by playback speed, and layered.
 It runs on a **live input** by default and switches to granulating a **loaded
 sample** as soon as you select one from the card.
 
-Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.1.18**
+Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.4**
 
 ---
 
@@ -41,6 +41,17 @@ cost almost nothing. Long grains and dense clouds are cheap, no per-grain buffer
 5. Load a sample from the menu to granulate a recording; sweep **playh** through it.
 6. Patch a gate into **trig** for rhythmic grains, or set **Density** to 0 for
    trigger-only.
+7. Granulating a beat? Turn **snap** up — grains lock onto the transients instead of
+   landing in the gaps. Try it alongside **posJtr** at 1: the jitter sprays the reads
+   wide and Snap reels each one back onto a hit, so you get variety in *which* hit
+   rather than a comb of identical reads.
+8. For chords, switch **Playheads → multi** in the menu (sub-display button) to
+   reveal **heads** / **hsprd** / **htune**. `htune = 7` stacks fifths, `4` major
+   thirds, `−12` octaves down.
+9. Put the cursor on the **grain field** and **tap shift** — the X axis flips from
+    stereo position to *read position in the buffer*, so you can watch where grains
+    are actually reading. Tap again to flip back. This is the view that makes Snap
+    and multiple playheads legible.
 
 ---
 
@@ -54,7 +65,7 @@ can run at once.
 | trig | Fire | gate | Spawns one grain per rising edge (manual button or patched gate). |
 | hold | Hold | toggle | Freezes the current grains into a looping, frozen cloud. |
 | playh | Playhead | 0–1 / 0 | **Sample:** read position. **Live:** how far back in the buffer grains read — also the **feedback delay** (0 = most recent / tight, 1 = oldest / long echo). |
-| speed | Speed | −4…+4 / 0 | **Playhead scan rate** (sample mode) — decouples time from pitch. 0 = parked (playh is the position, as before); 1 = original tempo; negative = reverse; wraps at the ends. Touching playh re-seats the scan. |
+| speed | Speed | −4…+4 / 0 | *(Sample mode only — hidden in live mode.)* **Playhead scan rate** — decouples time from pitch. 0 = parked (playh is the position, as before); 1 = original tempo; negative = reverse; wraps at the ends. Touching playh re-seats the scan. |
 | dens | Rate | 0–16 / 3 | **Density** — target grain overlap (how many deep). 0 = trigger-only (free-run off). |
 | gLen | GrainLen | 1 ms – 1 s / 50 ms | Grain length. |
 | grains | Grains | 1–16 / 12 | Polyphony cap — how many grains may overlap at once. |
@@ -67,16 +78,31 @@ can run at once.
 | posJtr | PosJtr | 0–1 / 0 | Random spray of each grain's read position (±100 ms). |
 | rev | RevProb | 0–1 / 0 | Probability a grain plays in reverse. |
 | textr | Texture | 0–1 / 0.5 | Grain envelope shape: **Percussive (0) → Hann (0.5) → Tukey (1)**. |
+| snap | Snap | 0–1 / 0 | **Onset lock** — pulls each grain's read position onto the nearest transient instead of wherever the metronome landed. 0 = free (classic), 1 = locked. Turns a smear of a drum loop back into hits. |
+| color | Color | 0–1 / 0 | **Cutoff scatter** — each grain draws a random low-pass cutoff, darker with Color (20 kHz down to ~600 Hz at 1). The spectral Psprd: dark and bright grains interleave in one cloud. |
 | comp | Compress | 0–1 / 0 | **Per-grain leveling** — boosts quiet source bits / tames loud ones (±12 dB) so sparse clouds stay even. |
 | bin | Binaural | 0–1 / 0 | **3D depth** — adds interaural time difference (ITD) + head-shadow filtering on top of the pan, scaled by Spread. 0 = plain stereo. |
+| heads | Heads | 1–4 / 1 | **Playheads** — how many read points share the buffer. Grains are dealt round-robin between them. 1 = classic single head. *(Hidden until **Playheads → multi** in the menu.)* |
+| hsprd | HeadSpread | 0–1 / 0 | Position offset between heads. 0 = all heads stacked on the playhead; 1 = heads spaced evenly across the whole buffer/sample. |
+| htune | HeadTune | −12…+12 st / 0 | Pitch interval between heads — head *n* is transposed *n* × HeadTune. 7 = stacked fifths, 4 = major thirds, −12 = octaves down. Heads stack visibly in the grain field. |
 | level | Level | 0–1 / 0.7 | Output level. |
-| mix | Mix | 0–1 / 1 | Wet/dry — **live only**. 1 = grains, 0 = dry input through. Inert with a sample loaded. |
-| **fdbk** | **Feedback** | **0–1 / 0** | **Feedback — reinjects output into the buffer so the cloud regenerates and sustains. Live-mode; tanh soft-clipped so it saturates into a stable drone instead of running away. ~0.8 = clear tail, ~1 = held drone.** |
+| mix | Mix | 0–1 / 1 | *(Live mode only — hidden when a sample is attached.)* Wet/dry. 1 = grains, 0 = dry input through. |
+| fdbk | Feedback | 0–1 / 0 | **Regeneration** — reinjects output into the capture ring, tanh soft-clipped so it saturates into a stable drone instead of running away. **Live:** the cloud re-granulates its own output (~0.8 = clear tail, ~1 = held drone). **Sample (0.2.2+):** a feedback-sized share of grains reads the regeneration ring instead of the sample, so the cloud granulates its own tail on top of the sample. |
 
 ### Sample menu
 
 Press the unit's sub-display button for: **Select from Card**, **Select from Pool**,
 **Detach Buffer** (return to live input), **Edit Buffer**.
+
+### Menu options
+
+Below the sample tasks in the same menu:
+
+| Option | Choices / default | What it does |
+|---|---|---|
+| Playheads | single / **single** | **multi** reveals the `heads` / `hsprd` / `htune` controls: grains are dealt round-robin to up to 4 playheads reading the same buffer at offset positions and stacked pitch intervals (`htune 7` = fifths, `−12` = octaves down). **single** hides the controls and hard-bypasses the DSP path. |
+| Diffuse | off / **off** | **on** runs the wet output through four cascaded allpasses per channel (~49 ms, different delays L/R) — smears grain edges into a lush halo, and feeds the regeneration loop so Feedback smears too. Off is a hard bypass. |
+| Capture | run / **run** | **freeze** stops *writing* the ~2.7 s capture ring: the source material locks while every control stays live — keep scanning, pitching, and re-granulating the frozen moment. Contrast with **Hold**, which freezes the *cloud* (grains loop, no new spawns); Freeze freezes the *source* (spawning continues). Pair with `fdbk` for a self-sustaining instrument; in sample mode it stalls the regeneration ring. |
 
 ---
 
@@ -92,9 +118,61 @@ delayed by up to ±31 samples (ITD) and rolled off by a one-pole head-shadow low
 (20 kHz → 4 kHz toward the side). **Spread** sets the width, **Binaural** the depth;
 at 0 it's bit-identical plain stereo.
 
+**Snap (onset lock).** Granulating rhythmic material normally lands in the gaps as
+often as on the hits, which is why drum loops turn to mush. Snap runs a short
+coarse→fine search around each grain's intended start — three stages of 12 probes,
+each scoring *energy after* minus *energy before* — and pulls the read toward the
+strongest rising edge within ±75 ms. At 1 the grains lock to transients; in between
+they're statistically biased toward them, so the cloud gets a pulse without becoming
+a stutter. Spawn-time only (~36 buffer peeks per grain), fully bypassed at 0.
+Measured on a click track: mean distance to the nearest onset drops **3.2×**.
+
+With **multiple playheads**, Snap runs per head, and the search window is
+automatically clamped to half the head spacing so each head stays in its own lane —
+otherwise the ±75 ms window is wider than the spacing at moderate HeadSpread and the
+heads collapse onto shared transients. Note the two features are geometrically in
+tension when the head spacing is much smaller than the gap between onsets: there is
+no position that is both on a transient *and* correctly spaced, so Snap simply goes
+quiet for the heads that can't reach one. Wide HeadSpread gets you both. HeadTune
+(pitch) is never affected, so the chord holds at any Snap setting.
+
 **Compression.** At spawn, Dirac peeks the source where each grain will read and
 applies a makeup gain toward a target — so quiet passages still speak in sparse
 clouds without making loud ones clip.
+
+**The strip follows the source mode.** Mode-gated controls are placed and removed as
+you attach or detach a sample rather than left on screen doing nothing. Attaching
+hides **mix** (wet/dry over the live input) and reveals **speed** (the playhead
+scanner, which only means anything with a sample). Detaching reverses it. **fdbk**
+stays visible in both modes since 0.2.2 (sample-mode regeneration). Controls return to their
+proper slot in the strip, not the end, and the state is reconciled on preset load —
+including sample-less presets, which never fire the attach path.
+
+**Grain field: shift-tap to change the X axis.** The field normally plots each grain
+at its **stereo position**. Tap **shift** while the cursor is on the field and the X
+axis becomes **read position in the buffer/sample** — where each grain is actually
+reading — with the sub display swapping from the Dirac epigraph to an axis legend.
+Tap shift again to go back.
+
+This is how you *see* Snap and multiple playheads working. Turn HeadSpread up and the
+cloud splits into one column per head; turn Snap up on rhythmic material and the
+grains visibly collect onto the transients. Measured on a click track (each character
+is roughly one pixel column of the real 42-px panel):
+
+```
+snap=0      ......-++#+##++-..........................
+snap=1      ....+.--##--##----........................    grains gather on the hits
+
+hsprd=0.0   ..#+......................................    heads stacked
+hsprd=0.3   ..#..#+.##.##.............................    heads separating
+hsprd=0.9   ..#........##........#........##..........    four distinct heads
+```
+
+Shift is free on this control because it has no gain/bias readouts to collide with
+the firmware's `shift+sub` (numeric entry) and `shift+encoder` (fine adjust)
+bindings. A shift *tap* is distinguished from shift-as-a-modifier, so holding shift
+for something else never flips the axis. The mode is a view preference — it isn't
+saved with the preset.
 
 **Visualizer.** The grain-field display draws each grain as an upward **triangle** —
 a Dirac-comb impulse — at its stereo position (horizontal) and pitch (vertical); the
@@ -126,11 +204,100 @@ g++ -std=c++11 -O2 -ffast-math -Itest/host -Isrc src/Dirac.cpp test/host/main.cp
 ./t ident out.raw   # deterministic renders (bit-exactness comparisons)
 ./t asan            # torture configs (build with -std=c++17 -fsanitize=address,undefined)
 ./t seam <label>    # R-channel click metric at a sample loop boundary
+./t snapt           # Snap: mean |grain start - nearest onset| on a click track
 ```
 
 ---
 
 ## Changelog (recent)
+
+- **0.2.4** — **Removed Orbit.** It measured real (roughly double the stereo-balance
+  swing, +254% image-movement rate at `dens 2 / gLen 500 ms`) but never earned its
+  strip slot on hardware. Three things capped it: equal-power panning is only a ~5 dB
+  cue, the `sin(πt)` envelope silences the departure and arrival so ~25% of the
+  excursion is inaudible, and per-grain random directions partially cancel across a
+  cloud. Coherent direction was tested as a fix and was *worse* at the sparse/long
+  settings that showcase it. The honest verdict was "real but subtle," which is the
+  category that clutters an interface without expanding what you can make. Removal
+  also simplified the **Color** path (it no longer has to clamp Orbit's alpha-sweep
+  endpoints) and the **Hold** path (no increments to park at loop time).
+  *If grain motion comes back it should be doppler-based* — pitch shift is the cue
+  the ear actually reads as movement, and it was deliberately avoided here.
+
+- **0.2.3** — Removed **Glide** (glisson) after hardware testing — cut to keep the
+  strip tight. Everything else from 0.2.2 unchanged.
+- **0.2.2** — Four new sound features + one unlock. **Color**: per-grain low-pass
+  cutoff scatter (the spectral Psprd) — dark and bright grains interleave in one
+  cloud. **Glide**: glisson grains — each grain's pitch slides to a scattered
+  destination over its life — the pitch analog of a spatial sweep. **Diffuse** (menu, off
+  by default): four cascaded allpasses per channel on the wet path smear grain
+  edges into a lush halo, and feed the regeneration loop so Feedback smears too.
+  **Freeze** (menu): stops writing the capture ring — Hold freezes the *cloud*,
+  Freeze freezes the *source*, with every control still live over the locked
+  2.7 s (pair with Feedback for a self-sustaining instrument). And **Feedback now
+  works in sample mode**: the ring becomes a regeneration bed and a
+  feedback-sized share of grains granulates the unit's own output alongside the
+  sample. Everything new is hard-bypassed at its default — all off = bit-identical
+  render path to 0.2.1.
+- **0.2.1** — Code-review fixes on 0.2.0 (sound-identical in normal use; install
+  alongside 0.2.0 to A/B). Fixed **Orbit + Hold**: held orbiting grains kept
+  integrating their travel every loop — gains grew without bound into a distorted
+  drone (and with Binaural up could mute a channel); they now park at their travel
+  destination. **Live-mode multi-playhead** offsets now scale into the ring room
+  remaining behind the Playhead position, so at high playh + HeadSpread the "older"
+  heads no longer wrap onto the freshest material (head order stays monotonic;
+  spacing narrows gracefully toward playh = 1). **Snap** now runs at most 2 onset
+  searches per audio block — bounds the worst-case CPU (~16×) at extreme
+  density/short-grain settings where snapping is inaudible anyway; normal densities
+  never hit the cap. Test harness compiles again as documented (public accessors
+  instead of private pokes) and gained an Orbit+Hold regression case.
+- **0.2.0** — Three new sound features and three display/UI changes. Everything new
+  is off or neutral by default, so a v0.1.18 patch sounds the same.
+
+  *Sound:*
+
+  **Snap** *(new control, 0–1, default 0)* — locks grain starts to transients.
+  A coarse→fine onset search at spawn (3 stages × 12 probes over ±75 ms, scoring
+  energy-rise) pulls each grain's read position onto the nearest hit. Turns a
+  granulated drum loop back into hits instead of mush. Verified **3.2× closer** to
+  onsets on a click track. Spawn-time only; hard-bypassed at 0.
+
+  **Orbit** *(new control, 0–1, default 0)* — grains travel the field over their
+  life instead of holding one pan. Pan gains and the binaural head-shadow are
+  lerped together, so the timbre moves with the position; ITD deliberately stays
+  fixed (sweeping it would doppler the read). Two adds per sample, and only for
+  grains actually in motion. **Density is the lever** — every grain travels a random
+  direction, so dense clouds average into a blur; try `dens 2 / grains 3 / gLen
+  500 ms`. Grain length sets the rate, not the distance.
+
+  **Multiple playheads** *(new controls `Heads` / `HeadSpread` / `HeadTune`, hidden
+  by default)* — N read points share one buffer, grains dealt round-robin, each head
+  offset in position and transposed by a fixed interval. Instant granular chords, or
+  one phrase heard at several points in its own history at once. **Spawn-time only**
+  — no per-sample cost and no extra grains, so the `Grains` cap and density are
+  unchanged. Gated behind a new **Playheads** menu option (`single` / `multi`,
+  default `single`) to keep the strip short: `single` hides the three controls *and*
+  hard-bypasses the DSP, so a stray Heads CV can't engage it.
+
+  *Display and UI:*
+
+  **Mode-aware control strip** — `mix` and `fdbk` are hidden once a sample is
+  attached, `speed` is hidden in live mode. All three are already inert in the wrong
+  mode at the DSP level, so this removes dead knobs rather than changing behaviour.
+
+  **Shift-tap the grain field to switch its X axis** from stereo position to
+  buffer read position — the first display that shows *where* grains are reading, so
+  Snap and multi-playhead are finally visible rather than inferred. Sub display swaps
+  to an axis legend. No new control, no strip slot.
+
+  **Texture is now readable in the grain field** — the glyphs morph with the knob:
+  a leaning wedge at Percussive, a symmetric arrowhead at Hann, a flat-topped
+  trapezoid at Tukey. No new UI element, just a more informative display.
+
+  *Note:* with everything at defaults this release is numerically equivalent to
+  v0.1.18 but no longer bit-identical — max deviation 3.5e-5 (≈ −89 dBFS), traced to
+  FMA reassociation in the multi-playhead transpose expression under `-ffast-math`,
+  not a behaviour change.
 
 - **0.1.18** — **Speed**: playhead scan control, decoupling time from pitch (sample
   mode). Grain pitch stays per-grain read speed; Speed moves where grains spawn —

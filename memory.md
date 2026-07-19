@@ -265,3 +265,378 @@ Shared scaffolding with Planck/Bohr (source switch, capture ring, Mix, spawn
 model, viz, build). But the ENGINE is independent — a Planck spectral fix does
 NOT auto-apply here. The chord-decorrelation idea (planck v0.7.9) IS carried in
 (onset stagger). Whirlpool is the time-domain reference (`../whirlpool`).
+
+## M4L port (2026-07)
+
+`m4l/` contains a Max for Live port: gen~ engine (dirac.genexpr embedded in
+dirac.gendsp), Dirac.maxpat wrapper, dirac-wave.js (WaveHeadView equivalent)
+and dirac-field.js (triangle field). Plan + rationale: PORT-M4L.md. Status:
+generated, NOT yet compiled in Max — first-open syntax nits expected in the
+codebox; acceptance checklist in m4l/BUILD.md. Chord voices deferred to v1.1.
+SUPERSEDED for devices by ../m4l/dirac/ (the confirmed build_amxd pipeline);
+this folder's m4l/ is kept for the design docs + js sources, per SUPERSEDED.txt.
+
+## Eurorack / Tap-O-Matic firmware (2026-07)
+
+Three hardware concepts sketched (SVGs in this folder): a 22HP dedicated
+panel (`eurorack-panel-mockup.svg`), a DPT mapping (`DPT-PORT.md`), and —
+CANONICAL, since Nick owns the hardware — the **Tap-O-Matic DDV param-fader
+firmware** (`TAPOMATIC-PORT.md`, `tapomatic-panel-params.svg`; the grain-
+histogram variant `tapomatic-panel-mockup.svg` is parked).
+
+**`tapomatic/` holds the WRITTEN firmware** (July 2026, host-verified, not
+yet flashed): `dirac_engine.c` = the audited M4L codebox regenerated via
+`m4l/tools/gen2c.py --float` (new float mode: f-suffixed libm, GEN2C_BIG_ARRAY
+SDRAM hook, requires -fsingle-precision-constant — M7 FPU is single-precision,
+double math there is soft-float). Engine UNMODIFIED — the six port deltas
+(dry/wet split via mix=1 + wrapper dry sum, run=1, v/oct summing, reverse CV,
+defaults, speed = wrapper-integrated playhead drift) live in `tap_mapping.h`
+(pure, host-tested) + `TapDirac.cpp` (patterns from the DDV's TimeMachine.cpp:
+block 5, LEDs from main loop — FPU lazy-stacking, GPIO PULLUP switches).
+Host results: float engine ALL GREEN on the ported audit harness (0 clicks
+matrix-wide, HFres at floor); mapping suite ALL GREEN (v/oct +1V=+12semi
+clamp ±24, drift wrap, 20k-state registry fuzz, end-to-end granulation RMS
+0.25 + trigger-only mode). Test gotcha worth remembering: at playhead ≥ ~0.5
+the module is CORRECTLY silent for up to 2.7 s after reset (frontier gate —
+that ring history doesn't exist yet).
+
+time_machine_hardware.{h,cpp} are VENDORED into tapomatic/ (from the DDV
+repo, attribution headers; the .cpp omits only the disabled-by-default
+NOISE_DIAGNOSTICS impl block — re-copy upstream if enabling that flag, or
+if upstream fixes hardware bugs). Remaining for Nick: `make
+LIBDAISY_DIR=...`, `make program-dfu`, then the README first-power-on
+checklist (switch orientation, v/oct offset, CPU headroom).
+
+## v0.2.0 — multiple playheads + Texture glyph + Playheads option (2026-07)
+
+- **Multi-playhead**: `Heads` [1,4] / `HeadSpread` [0,1] / `HeadTune` [-12,+12] st.
+  At spawn a grain is dealt round-robin to head h; position offset
+  `(h·spread)/heads` of the buffer span (spread=1 → heads evenly distributed),
+  pitch offset `h·HeadTune`. **Spawn-time only — no per-sample cost, no extra
+  grains** (Grains cap + density unchanged). `heads=1` short-circuits =
+  bit-identical to v0.1.18. `g.pitchSemi` now carries the head transpose so heads
+  stack visibly in the grain-field viz. Verified: 3 heads @+7 → 14 st span,
+  4 @−5 → 15 st, 1 → 0 st; finite/bounded.
+- **Playheads menu option** (`od::Option`, 1=single default / 2=multi). Off hides
+  the 3 controls (they're NOT in `controlOrder`; `showHeads()` places/removes them
+  mirroring `showWaveform()`, with `onLoadFinished()` syncing a restored preset)
+  AND hard-bypasses the DSP (`heads` forced to 1). Verified: option=1 with
+  Heads=4/Tune=7 cranked → 0.0 st span; option=2 → 21 st.
+- **Texture now readable in the grain field**: `triSplat` takes `tex` and morphs
+  the glyph — leaning wedge (Percussive 0) → symmetric arrowhead (Hann 0.5) →
+  flat-topped trapezoid (Tukey 1). New `getVizTexture()`. No new UI element.
+- Host stub gained `od::Option` (Dirac's harness lacked it). `asan`/`seam`/`ident`
+  all still pass. Needs docker-build + hardware.
+
+### v0.2.0 (cont.) — Snap + Orbit
+
+- **Snap** `[0,1]`, default 0 — onset-locked spawning. At spawn, before the
+  Compress peek, a **coarse→fine** search runs over the source: 3 stages × 12
+  candidates, window starts at ±3600 samples (±75 ms) and shrinks by `2/(kCand-1)`
+  each stage (~30-sample final resolution for 36 probes — a flat grid that fine
+  would need 240). Each candidate scores `Σ(after²) − Σ(before²)` over 5 taps per
+  side at 40-sample spacing; positive = rising edge. Only pulls if
+  `bestScore > 0`, and lerps: `startPos += snap * (bestPos - startPos)`.
+  **Spawn-time only.** First attempt (16 flat candidates, 4 taps @32) gave only
+  1.5× improvement — the grid was coarser than the onset spacing. Coarse→fine
+  gives **3.2×** (`snapt` test: mean |start − onset| 1184 → 371 samples).
+- **Orbit** `[0,1]`, default 0 — grains travel the field over their life. At spawn:
+  `panEnd = pan + orbit*2*randBipolar()` (clamped ±1), then
+  `gainLIncr/gainRIncr = (endGain − startGain)/duration` and the same for the
+  binaural `lpAlphaL/RIncr`. **ITD is deliberately NOT swept** — modulating the
+  read offset would doppler-shift the grain. Render loop: `gL/gR/lpAL/lpAR` went
+  from `const` to running values incremented per sample under a `moving` flag
+  (all four increments zero → flag false → old code path exactly), written back
+  to the Grain each block along with `panPos += panIncr*toRender` so the viz
+  follows. `orbitt` test: mean |ΔgainL| over a grain's life 0.0000 (off) → 0.3746
+  (on), 0 non-finite, gains bounded (peak 1.41491 vs √2 = 1.41421 — 0.05%
+  incremental float drift, ≈0.004 dB, accepted rather than adding a per-sample
+  clamp).
+- Both are in `controlOrder` (visible by default) and both hard-bypass at 0.
+- **`ident` is NOT bit-identical to HEAD (v0.1.18)**: max abs deviation 3.5e-5
+  (≈ −89 dBFS) starting frame 1031. Traced to FMA reassociation from the
+  multi-playhead `semis + float(head)*headTune` term under `-ffast-math`, NOT a
+  behaviour change (reverting the basePos block alone did not restore the hash).
+  README claim softened from "bit-identical" to "numerically equivalent".
+- Host harness: new `snapt` and `orbitt` modes. **Gotcha:** the mode dispatch has
+  an `#ifdef HAS_SPEED` block — new modes must go BEFORE it or they silently
+  report "unknown mode" unless `-DHAS_SPEED` is passed.
+
+### Snap × multi-playhead interaction (v0.2.0)
+
+Snap runs AFTER the head offset in `spawnGrain`, so each head snaps independently.
+Measured (`headsnap` test, onsets every 4800, 4 heads): unclamped, HeadSpread=0.5
+dropped 4 distinct onsets → 3, and HeadSpread=0.10's even 1200-sample ladder
+collapsed into two clusters — the ±3600 search window is wider than the head
+spacing. **Fix: clamp the window to half the head gap** (`headGap` computed in both
+live and sample branches), with a `kMinLane = 400` floor below which heads are
+treated as stacked and allowed to converge (that case is reachable deliberately via
+HeadSpread ≈ 0). After: HeadSpread=0.5 holds 4 distinct onsets.
+
+**Decided AGAINST a user control for this.** It would only matter when Snap > 0 AND
+Playheads = multi AND HeadSpread sits in a middle range — three conditions deep, and
+the user is explicitly trying to limit control count. Convergence is already
+reachable by lowering HeadSpread; ladder-preservation was NOT reachable any other
+way, so the clamp adds capability rather than trading one for another. Honest caveat
+kept in the README: at moderate spacing the two features are geometrically
+incompatible (no position is both on-transient and correctly spaced), so Snap goes
+inert for heads that can't reach an onset within their lane. HeadTune is never
+touched by Snap — the chord always holds.
+
+### Shift-tap axis toggle on the grain field (v0.2.0)
+
+**The idea:** Snap and multi-playhead both move grains to specific buffer positions,
+and NO display showed where. The waveform shows one playhead marker, not 4 heads and
+not Snap's pull. Shift-tap on `GrainFieldView` now swaps the field's X axis from
+stereo pan to normalised read position, and swaps the sub display from the Dirac
+epigraph to an axis legend.
+
+**Why the field control specifically:** shift is heavily booked by the firmware on
+GainBias controls (`shift+sub2/3` = numeric keyboard entry, `shift+encoder` = fine
+adjust, plus shift+spot/dial). `GrainFieldView` is display-only — no readouts — so
+shift is free there. Pattern borrowed from habitat's `AnamSubControl`:
+`grabFocus("shiftPressed","shiftReleased")` on cursor enter, `shiftUsed` flag to
+tell a TAP from shift-as-modifier.
+
+**API traps hit (both would have crashed on hardware):**
+- `ViewControl` defines **no** `encoder` and **no** `subReleased`. My first draft
+  overrode `encoder` and called `ViewControl.encoder(...)` → nil call. The only
+  shift-taking methods the base actually defines are `dialPressed(shifted)` and
+  `spotReleased(spot, shifted)`; the shiftUsed guard hangs off those.
+- `ViewControl:onCursorEnter/Leave` already add/remove `self.subGraphic`, so
+  `setAxisMode` must remove the OLD graphic before swapping the field and adding the
+  new one, or the panel leaks/blanks.
+
+**DSP side:** new `Dirac::getGrainReadPos01(i)` — live mode returns position relative
+to the ring write head (1 = newest), sample mode returns readPos/mEndIndex. Uses the
+LIVE read position, not the spawn position, so grains drift as they play.
+`DiracFieldGraphic::setAxisMode()` clears the phosphor on change so the two mappings
+don't smear together; POSITION mode draws a dashed baseline so an empty field still
+shows which mode you're in, and skips the L/R detune split (a stereo concept that's
+meaningless on this axis).
+
+**SECTION_PLY = 42**, so the panel is 42 px for the whole buffer — coarse but the
+right scope (whole-buffer overview, not a zoom). Verified with `fieldpos` test which
+histograms into 42 columns: hsprd 0.0/0.3/0.9 → 1 column / clustered pairs / 4 even
+columns; snap 0→1 turns a broad smear into two clumps. Axis mode is NOT serialised
+(view preference, like focus).
+
+### Mode-aware control strip (v0.2.0)
+
+`mix` + `feedback` hidden in SAMPLE mode, `speed` hidden in LIVE mode. All three are
+already hard-gated in Dirac.cpp (`if (liveMode && mix < 0.99995f)`,
+`if (liveMode && feedback > 0.0001f)`, speed inside `if (!liveMode)`), so this only
+removes knobs that visibly move and do nothing — no behaviour change.
+
+**Hook:** `Dirac:setSample()` is the single funnel (card, pool, detach, and
+deserialize all route through it) and already called `showWaveform`; added
+`showModeControls(self.sample == nil)` beside it. `onLoadFinished()` also calls it,
+because `deserialize` only invokes setSample when the preset HAS a sample — a
+sample-less preset would otherwise never reconcile.
+
+**The subtle part — insertion position.** `placeControl(id, view, pos)` takes a
+USER-facing position and internally does `pos + 2` to skip the insert+header
+entries. Appending (pos=nil) is what showHeads does, fine for controls that live at
+the end — but `speed` sits between `playhead` and `grainlen`, so re-showing it must
+compute a position or the strip order scrambles. `orderedPosition()` counts how many
+of a control's canonical predecessors are currently placed. Canonical order =
+`{"wave","field"} .. controlOrder`; head controls are appended after everything so
+they're deliberately absent from it. Verified by simulating the Lua table arithmetic
+in Python across boot → attach → detach → re-attach → detach-with-heads: all orders
+correct.
+
+**Lua scoping trap hit:** `kExpandedOrder` is built next to `controlOrder`, far BELOW
+`showModeControls`. A `local` declared after a function is not an upvalue of it — it
+resolves as a nil global at call time. Fixed with a forward `local kExpandedOrder`
+above the function and a plain assignment (not re-declaration) below. Same trap would
+bite any future helper that references the view tables.
+
+`speed` is also removed from the default `views.expanded` (built live-mode-first) but
+KEPT in `controlOrder` so its focused view `{"wave","speed"}` is still created.
+Note: head controls are NOT in controlOrder, so they have no focused view and fall
+back to the framework default `{"scope", <control>}` — pre-existing, not fixed here.
+
+### Orbit audibility — CORRECTION to earlier advice (v0.2.0)
+
+I originally documented Orbit as "best with long grains and Binaural up". Hardware
+feedback ("orbit was not prominent") prompted an actual measurement (`orbitaud` test:
+RMS of block-rate stereo balance (|L|-|R|)/(|L|+|R|)), and the advice was wrong on
+both counts:
+
+```
+ gLen   dens2/grains3   dens12/grains16
+  50ms      0.427            0.175
+ 200ms      0.340            0.176
+ 500ms      0.370            0.153
+1000ms      0.310            0.166
+```
+
+- **DENSITY is the dominant lever**, not grain length — swing roughly HALVES at high
+  density. Each grain picks a random direction, so a dense cloud averages them into a
+  static blur. Dirac's defaults (`dens 3 / grains 12`) sit in the washed-out regime,
+  which is why it read as weak on hardware.
+- **Grain length does not change travel distance**, only the RATE: 50 ms ≈ 20 Hz zip
+  (perceived as width/timbre), 500 ms ≈ 2 Hz sweep (perceived as motion). The metric
+  measures magnitude, not rate, hence the flat column.
+- **Orbit does NOT require Binaural or Spread.** `pan = randBipolar() * sprd` but
+  `panEnd = pan + orbit*2*randBipolar()` runs whenever orbit > 0, so the pan lerp is
+  independent of both; Binaural only adds the head-shadow sweep on top. Swing at
+  `bin = 0` is 0.15–0.43, i.e. plainly audible.
+
+## v0.2.3 — removed Glide (2026-07)
+
+Nick tested 0.2.2 on hardware, kept Color/Diffuse/Freeze/sample-mode-feedback, cut
+**Glide** (control-count discipline; the feature worked — `glidet` passed — it just
+didn't earn its dial). Fully backed out: inlet, Grain fields
+(glideRatio/pitchSemiIncr), spawn block, render-loop ratio path (incL/incR back to
+const — hot loop restored exactly), seam travScale, hold park lines, Lua
+param/dial/controlOrder, harness `glidet` + setInputs + torture ctl. Ports after
+Color re-registered one earlier — safe, everything is name-bound. If glisson ever
+comes back, the full implementation is in git history at the 0.2.2 tree.
+
+Also in 0.2.3: **Heads dial now integer-steps** (LinearDialMap(1,4) +
+setCoarseRadix(3), the Grains/Semitone pattern) — it deals grains to discrete
+heads and the DSP rounds anyway, so a "2.7 heads" readout was noise. Note the
+integer maps at the bottom of onLoadViews are declared AFTER the heads gb call,
+so headsMap is declared locally beside it.
+
+## v0.2.2 — four features + sample-mode feedback (2026-07)
+
+Nick approved the commercial-gap proposals; everything hard-bypassed at defaults —
+**`ident` is BIT-IDENTICAL to 0.2.1** with all new features off (host-verified cmp).
+
+- **Color** (dial): per-grain LP cutoff scatter, log-uniform 20 kHz→~600 Hz at 1
+  (`fc = 20000·e^(−3.5·color·u)`). REUSES the binaural head-shadow one-pole:
+  min-combined per ear INCLUDING the Orbit alpha-sweep endpoints (recomputes the
+  increments), so a sweeping grain never rises above its colour ceiling. Render
+  cost = the already-gated LP path. `colort`: HF ratio 1.10→0.46 (2.36× darker).
+- **Glide** (dial): glisson — per-grain destination ±12 st·glide (clamped
+  ±kMaxTranspose), per-sample RATIO on both pitch increments (exponential in Hz =
+  linear in st; detune interval preserved). Persisted like Orbit's gains
+  (magnitude stored, reverse sign stripped on write-back); seam-gate travel
+  estimate scaled by glr^toRender on the rising side. **Hold PARKS it**
+  (glideRatio=1, pitchSemiIncr=0) — same lesson as Orbit×Hold, or pitch compounds
+  every loop. `glidet`: ZC dev 0.00 off / 0.11 on; held max |pitchSemi| = 12 st.
+  Viz: pitchSemi drifts so the field shows the bend.
+- **Diffuse** (menu option, off default): 4 cascaded Schroeder allpasses per
+  channel, mutually-prime delays L={113,337,719,1201} R={127,347,743,1213},
+  g=0.6, ~49 ms path. Placed AFTER the grain sum, BEFORE the feedback tap →
+  regeneration is diffused (tanh still bounds the loop). Inputs sanitized so NaN
+  can't lodge in the delay lines; lines cleared on Off (mDiffusePrimed). C++11
+  gotcha: static constexpr arrays need out-of-line defs in Dirac.cpp. `difft`:
+  temporal spread ×36.6, energy ×1.00 (exactly conserving). CPU: +14% on a busy
+  host config (~0.03% realtime absolute). **Test-methodology trap worth
+  remembering: the first difft missed the FIRE block in the dry pass — the
+  diffuser delayed that unmeasured energy into the window and read as ×9.7
+  "gain". Chased it through isolated-allpass, ASan, -O0, stub-aliasing before
+  finding the test bug. Measure ALL blocks from the trigger.**
+- **Freeze** (menu option, "Capture: run/freeze"): gates every ring write (input
+  mix AND feedback reinjection); mCapWrite parks, all controls stay live over the
+  locked 2.7 s. Hold freezes the CLOUD, Freeze freezes the SOURCE. `freezet`:
+  late RMS 0.17 frozen vs 0.0000 running. Test gotcha: playh must sit inside the
+  tone-filled span of the ring or frozen grains read pre-fill zeros.
+- **Sample-mode Feedback** (the old "possible v2" note, done): ring now captures
+  `in + fdbk·tanh(wet)` in BOTH modes; in sample mode a FEEDBACK-SIZED SHARE of
+  spawns becomes regen grains (`randUnipolar() < feedback` → g.live=true) reading
+  a tight anchor `mCapWrite − grainDuration − 4800` (margin covers posJtr's
+  bipolar spray). Per-grain source choice = hot loop untouched. Head position
+  offsets skipped for regen grains, head PITCH kept (they join the chord);
+  snap/compress peeks follow srcLive so they probe the right source. Lua:
+  feedback REMOVED from kLiveOnlyControls (visible in both modes now), labels
+  updated. `sfbt`: silent sample, late RMS 0.338 regen vs 0.000 at fdbk 0,
+  bounded, 0 non-finite.
+- Harness: setInputs gained Color/Glide (forgot at first — colort silently
+  no-opped; add new inlets to the ins[] list EVERY time), asan gained a v0.2.2
+  torture config (everything at once + freeze toggled mid-flight + detach with
+  diffuser running). All modes PASS under ASan+UBSan.
+
+## v0.2.1 — code-review hardening (2026-07)
+
+Released as its OWN version (Makefile + toc.lua 0.2.1) so Nick can A/B against the
+0.2.0 pkg on device. Three changes, all host-verified:
+
+- **Live-mode head offsets scale into remaining room.** Was `basePos -= headOff ·
+  (maxDelay − minDelay)` — at playh→1 with HeadSpread up, total delay reached
+  ~1.75× the ring and the mask wrapped "older" heads onto the freshest material
+  (write-head collision zone, scrambled head order). Now `room = maxDelay − delay`
+  and both the offset AND `headGap` (the Snap lane width) scale by it: heads always
+  fit, order monotonic, spacing shrinks to stacked at playh = 1. Host (`livehead`
+  throwaway, playh 0.95 / hsprd 1 / 4 heads / HeadTune 1): pre-fix h3 delay
+  exceeded maxDelay (wrapped); post-fix all delays in [minDelay, maxDelay], strictly
+  increasing with head index. BEHAVIOR NOTE vs 0.2.0: live-mode head spacing now
+  narrows as Playhead rises (it no longer aliases instead).
+- **Snap per-block search budget** (`kSnapPerBlock = 2`, `mSnapBudget` reset each
+  process()). The 360-read coarse→fine search ran per spawn; worst case (64-sample
+  grains, overlap 16 ≈ 12k spawns/s) ≈ 4.3M reads/s. Budget caps it at 2
+  searches/block (~16× worst-case reduction); grains past the budget spawn
+  unsnapped that block. Deliberately NOT a per-block cached result — posJtr+Snap
+  landing each grain on a DIFFERENT hit (README quick start #7) requires per-grain
+  searches. Musical densities (~1 spawn/block in the snapt/headsnap configs) never
+  hit the cap: snapt still 3.2×, headsnap still 4 distinct onsets at hsprd 0.5.
+- Version bumped in Makefile + toc.lua + README (changelog entry added).
+
+### Code-review fixes (v0.2.0, pre-release)
+
+- **FIXED Orbit × Hold unbounded gain drift.** The hold-loop branch reset
+  age/envPhase/readPos but NOT the orbit travel state, so a held orbiting grain kept
+  integrating its increments every loop: host-measured gains grew ~4.8/s linearly,
+  crossed zero (phase flip), pinned the soft limiter into a distorted drone; with
+  Binaural up the LP alphas left [0,1] and killed the channel. Fix: the grain sits
+  exactly at its travel destination at loop time, so the hold branch now zeros all
+  five increments (gainL/R, lpAlphaL/R, pan) — the grain parks there. Regression
+  case added to `orbitt` (orbit 1 + binaural 1 + ~4 s of hold: peakGain 1.4152,
+  bounded; 0 bad).
+- **FIXED harness compile break.** The new test modes reached into private state
+  (`Dirac::kMaxGrains`, `mGrains[i].readPos0L/gainL/gainR/pitchSemi`) — the README
+  build command failed with 7 errors. `kMaxGrains` is now a public constant and the
+  harness uses new public accessors `getGrainSpawnPos/getGrainGainL/getGrainGainR`
+  (+ existing `getGrainPitch`), all inside `#ifndef SWIGLUA` so the SWIG surface is
+  untouched. Also: `fieldpos` printf extra-arg wart fixed (prints top3 concentration
+  now), and `ident`/`speed` guard argc/fopen instead of segfaulting on bad usage.
+  All modes re-verified after the fixes: snapt 3.2×, orbitt/fieldpos PASS, seam
+  0.10473, asan clean (ASan+UBSan), ident runs.
+
+Recipe now documented: `dens 2 / grains 3 / gLen 500 ms / orbit 1`, then add `bin`.
+Corrected in README feature note, control table, quick start, and changelog.
+**Lesson: don't write performance advice from the design intent — measure it.**
+
+### Orbit REMOVED in v0.2.4 — and why
+
+Shipped in 0.2.0, cut in 0.2.4 after hardware listening ("doesn't seem to make much
+of a sonic difference"). **It was not broken** — `orbitab` A/B measured swing +152%
+and image-movement rate +254% at 500 ms / dens 2. It was just perceptually weak, for
+three stacking reasons:
+
+1. Equal-power pan is a ~5 dB cue for a half-field trip.
+2. The `sin(πt)` grain envelope silences departure AND arrival — amplitude-weighted
+   excursion is only 75% of a flat window, and just 50% of the trip is above −3 dB.
+3. Random per-grain directions partially cancel in a cloud.
+
+Tested **coherent direction** (all grains drift the same way) as a fix: better at
+dense/short (+229% vs +109% swing) but WORSE at the sparse/long showcase setting
+(+109% vs +152% swing, +127% vs +254% rate). Not the lever. Cut instead.
+
+**Process note worth keeping:** the first `orbitaud` test had NO orbit=0 control
+condition — it measured absolute swing and I read density/grain-length trends off it,
+which produced advice I later had to retract. Always include the off condition.
+
+**Entanglements unpicked on removal** (both introduced after 0.2.0, easy to miss):
+- **Color** clamped the Orbit alpha-sweep ENDPOINTS (`endL/endR` from
+  `lpAlphaL + lpAlphaLIncr*dur`) so a sweeping grain couldn't rise above its colour
+  ceiling. With Orbit gone this collapses to a plain min-combine of `lpAlphaL/R`
+  against `aC`.
+- **Hold** zeroed the five Orbit increments at loop time to stop gains running off
+  unbounded. Whole block deleted with the increments.
+- Render loop: `gL/gR/lpAL/lpAR` returned to `const`; `moving` flag, per-sample
+  increment step, and cross-block write-back all removed. `doShadow` dropped its
+  `lpA*Inc != 0` terms (Color still sets `lpAlphaL/R` directly, so it stays covered).
+
+**Port-index caveat:** `mOrbitIn` was registered between `mSnapIn` and `mColorIn`, so
+removing it shifts Color's port index down by one. Lua connects by NAME
+(`connect(p,"Out",head,port)`) and branches serialise by name, so this should be
+safe — but it's the reason the ctor comments stress append-only ordering. Worth
+confirming an old preset with Color set still reloads correctly.
+
+If spatial motion is ever revisited: **doppler**, not panning. Pitch shift is the cue
+the ear reads as movement. It was deliberately excluded (ITD held at spawn azimuth to
+avoid doppler-shifting the read) — but that artifact IS the effect.

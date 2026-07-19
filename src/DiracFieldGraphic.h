@@ -44,8 +44,23 @@ namespace dirac
         mpGrain->attach();
     }
 
+    // X-axis mode (v0.2.0), toggled by a SHIFT tap on the field control.
+    //   0 = STEREO   — X is the pan position (the original field)
+    //   1 = POSITION — X is where the grain reads in the buffer/sample
+    // Position mode is how you SEE Snap and multi-playhead working: the cloud
+    // visibly collects onto transients as Snap comes up, and splits into columns
+    // as HeadSpread opens. Clears the phosphor on change so the two mappings
+    // don't smear into each other.
+    void setAxisMode(int m)
+    {
+      const int v = (m != 0) ? 1 : 0;
+      if (v != mAxisMode) { mAxisMode = v; mCleared = false; }
+    }
+    int getAxisMode() const { return mAxisMode; }
+
   private:
     Dirac *mpGrain;
+    int    mAxisMode = 0;
 
     static const int kMaxW = 128;
     static const int kMaxH = 64;
@@ -64,17 +79,27 @@ namespace dirac
     // Additive "impulse" splat — an upward-pointing filled triangle (a Dirac-comb
     // arrowhead) centred at (x,y). Wide bright base, narrowing to a bright apex on
     // top; `size` scales with the grain's envelope (and a little with grain length).
-    inline void triSplat(int w, int h, int x, int y, int amt, int size)
+    // `tex` morphs the GLYPH into the grain's envelope shape, so the field reads
+    // the Texture knob at a glance:
+    //   0.0  Percussive — the wedge LEANS (fast attack, long decay)
+    //   0.5  Hann       — a symmetric triangle (the classic Dirac arrowhead)
+    //   1.0  Tukey      — a FLAT-TOPPED trapezoid (plateau window)
+    inline void triSplat(int w, int h, int x, int y, int amt, int size, float tex)
     {
       if (size < 1) size = 1;
+      // Above 0.5 → grow a plateau (Tukey).  Below 0.5 → lean the wedge (percussive).
+      const int   flat = (tex > 0.5f) ? int((tex - 0.5f) * 1.2f * float(size) + 0.5f) : 0;
+      const float skew = (tex < 0.5f) ? (0.5f - tex) * 2.0f : 0.0f;   // 0 … 1
       for (int r = 0; r <= size; ++r)
       {
-        const int yy   = y + r - (size >> 1);   // bottom (r=0) → apex on top (r=size)
-        const int half = size - r;              // base is widest, apex is a point
+        const int yy = y + r - (size >> 1);     // bottom (r=0) → apex on top (r=size)
+        int half = size - r;                    // base widest, apex a point …
+        if (half < flat) half = flat;           // … unless a Tukey plateau caps it
+        const int lean = int(skew * float(r) * 0.9f + 0.5f);   // percussive tilt
         int a = amt - (r >> 1);                 // slight fade toward the base
         if (a < 2) a = 2;
         for (int dx = -half; dx <= half; ++dx)
-          addPix(w, h, x + dx, yy, a);
+          addPix(w, h, x + dx - lean, yy, a);
       }
     }
     inline void addPix(int w, int h, int x, int y, int amt)
@@ -106,6 +131,7 @@ namespace dirac
         const float detune = mpGrain->getVizDetune();
         const float splitX = detune * (w * 0.45f); // detune → L/R split, scaled to panel width
         const bool  wide   = (spread > 0.01f) || (detune > 0.001f);
+        const float tex    = mpGrain->getVizTexture();  // morphs the glyph shape
 
         const int N = mpGrain->getGrainCount();
         for (int i = 0; i < N; i++)
@@ -131,22 +157,40 @@ namespace dirac
           int size = 1 + (int)(env * 3.0f + lt * 1.5f);          // 1..~5 px tall
           if (size > kMaxTri) size = kMaxTri;
 
-          int xc = (int)(cx + pan * halfW + 0.5f);
           int py = (int)(ny * (h - 1) + 0.5f);
           int amt = 5 + (int)(env * 10.0f);                     // bright mid-grain
           if (amt > 15) amt = 15;
 
+          if (mAxisMode)
+          {
+            // POSITION mode: X = read position in the source, full panel width.
+            // No L/R split — detune/spread are stereo concepts and mean nothing
+            // on this axis; a single mark per grain keeps the columns readable.
+            float pos = mpGrain->getGrainReadPos01(i);
+            if (!(pos == pos)) continue;                        // NaN guard
+            if (pos < 0.0f) pos = 0.0f; else if (pos > 1.0f) pos = 1.0f;
+            triSplat(w, h, (int)(pos * (w - 1) + 0.5f), py, amt, size, tex);
+            continue;
+          }
+
+          int xc = (int)(cx + pan * halfW + 0.5f);
           if (wide)
           {
-            triSplat(w, h, (int)(xc - splitX + 0.5f), py, amt, size);  // L image
-            triSplat(w, h, (int)(xc + splitX + 0.5f), py, amt, size);  // R image
+            triSplat(w, h, (int)(xc - splitX + 0.5f), py, amt, size, tex);  // L image
+            triSplat(w, h, (int)(xc + splitX + 0.5f), py, amt, size, tex);  // R image
           }
           else
           {
-            triSplat(w, h, xc, py, amt, size);                  // mono
+            triSplat(w, h, xc, py, amt, size, tex);             // mono
           }
         }
       }
+
+      // POSITION mode gets a dim baseline so the axis reads as an axis (and so
+      // an empty field still shows you which mode you're in).
+      if (mAxisMode)
+        for (int x = 0; x < w; x += 2)
+          addPix(w, h, x, 0, 3);
 
       // Background + phosphor render (monochrome; v is the 4-bit intensity).
       fb.fill(BLACK, mWorldLeft, mWorldBottom,

@@ -2915,6 +2915,22 @@ static int _wrap_DiracFieldGraphic_follow(lua_State* L) { int SWIG_arg = 0;
   if (!SWIG_IsOK(SWIG_ConvertPtr(L,2,(void**)&arg2,SWIGTYPE_p_dirac__Dirac,0))){
     SWIG_fail_ptr("DiracFieldGraphic_follow",2,SWIGTYPE_p_dirac__Dirac); }  (arg1)->follow(arg2); return SWIG_arg;
   if(0) SWIG_fail; fail: lua_error(L); return SWIG_arg; }
+static int _wrap_DiracFieldGraphic_setAxisMode(lua_State* L) { int SWIG_arg = 0;
+  dirac::DiracFieldGraphic *arg1 = (dirac::DiracFieldGraphic *) 0 ; int arg2 ;
+  SWIG_check_num_args("dirac::DiracFieldGraphic::setAxisMode",2,2)
+  if(!SWIG_isptrtype(L,1)) SWIG_fail_arg("dirac::DiracFieldGraphic::setAxisMode",1,"dirac::DiracFieldGraphic *");
+  if(!lua_isnumber(L,2)) SWIG_fail_arg("dirac::DiracFieldGraphic::setAxisMode",2,"int");
+  if (!SWIG_IsOK(SWIG_ConvertPtr(L,1,(void**)&arg1,SWIGTYPE_p_dirac__DiracFieldGraphic,0))){
+    SWIG_fail_ptr("DiracFieldGraphic_setAxisMode",1,SWIGTYPE_p_dirac__DiracFieldGraphic); }  arg2 = (int)lua_tonumber(L, 2);
+  (arg1)->setAxisMode(arg2); return SWIG_arg; if(0) SWIG_fail; fail: lua_error(L); return SWIG_arg; }
+static int _wrap_DiracFieldGraphic_getAxisMode(lua_State* L) { int SWIG_arg = 0;
+  dirac::DiracFieldGraphic *arg1 = (dirac::DiracFieldGraphic *) 0 ; int result;
+  SWIG_check_num_args("dirac::DiracFieldGraphic::getAxisMode",1,1)
+  if(!SWIG_isptrtype(L,1)) SWIG_fail_arg("dirac::DiracFieldGraphic::getAxisMode",1,"dirac::DiracFieldGraphic const *");
+  if (!SWIG_IsOK(SWIG_ConvertPtr(L,1,(void**)&arg1,SWIGTYPE_p_dirac__DiracFieldGraphic,0))){
+    SWIG_fail_ptr("DiracFieldGraphic_getAxisMode",1,SWIGTYPE_p_dirac__DiracFieldGraphic); } 
+  result = (int)((dirac::DiracFieldGraphic const *)arg1)->getAxisMode(); lua_pushinteger(L, (lua_Integer) result); SWIG_arg++;
+  return SWIG_arg; if(0) SWIG_fail; fail: lua_error(L); return SWIG_arg; }
 static int _wrap_DiracFieldGraphic_draw(lua_State* L) { int SWIG_arg = 0;
   dirac::DiracFieldGraphic *arg1 = (dirac::DiracFieldGraphic *) 0 ; od::FrameBuffer *arg2 = 0 ;
   SWIG_check_num_args("dirac::DiracFieldGraphic::draw",2,2)
@@ -2942,6 +2958,8 @@ static swig_lua_attribute swig_DiracFieldGraphic_attributes[] = {
 };
 static swig_lua_method swig_DiracFieldGraphic_methods[]= {
     { "follow", _wrap_DiracFieldGraphic_follow},
+    { "setAxisMode", _wrap_DiracFieldGraphic_setAxisMode},
+    { "getAxisMode", _wrap_DiracFieldGraphic_getAxisMode},
     { "draw", _wrap_DiracFieldGraphic_draw},
     {0,0}
 };
