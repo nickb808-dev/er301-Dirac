@@ -508,6 +508,45 @@ int main(int argc, char **argv)
         return pass ? 0 : 1;
     }
 
+    // ── headscale: diatonic head ladder (v0.2.7) ────────────────────────────
+    // 4 heads, htune 4, psprd 0, semi 0. Scale MAJOR must voice {0,4,7,12}
+    // (triad + octave); Scale OFF must keep the chromatic {0,4,8,12}.
+    if (!strcmp(argv[1], "headscale")) {
+        std::vector<float> st; od::Sample smp = makeSample(st, 48000, 1);
+        int bad = 0;
+        for (int pass = 0; pass < 2; ++pass) {
+            const float expct[2][4] = {{0,4,8,12},{0,4,7,12}};
+            Dirac d; rng = 0x0dda; d.setSample(&smp);
+            d.mMultiHeadOpt.set(2);
+            Ctl c[] = {{"Playhead",0.3f},{"Rate",8.0f},{"GrainLen",0.05f},{"Grains",16.0f},
+                       {"Level",0.7f},{"Texture",0.5f},{"Psprd",0.0f},{"SemiShift",0.0f},
+                       {"Heads",4.0f},{"HeadSpread",0.2f},{"HeadTune",4.0f},
+                       {"Scale",pass?2.0f:0.0f}};   // 2 = major
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            bool seenPitch[4] = {false,false,false,false};
+            bool seen[dirac::Dirac::kMaxGrains] = {false};
+            for (int b = 0; b < 200; ++b) {
+                d.process();
+                for (int i = 0; i < dirac::Dirac::kMaxGrains; ++i) {
+                    if (d.isGrainActive(i) && !seen[i]) {
+                        seen[i] = true;
+                        const float ps = d.getGrainPitch(i);
+                        bool ok = false;
+                        for (int k = 0; k < 4; ++k)
+                            if (fabsf(ps - expct[pass][k]) < 0.01f) { seenPitch[k] = true; ok = true; }
+                        if (!ok) { bad++; printf("  unexpected pitch %.2f (scale=%d)\n", ps, pass?2:0); }
+                    } else if (!d.isGrainActive(i)) seen[i] = false;
+                }
+            }
+            int distinct = 0; for (int k = 0; k < 4; ++k) if (seenPitch[k]) distinct++;
+            printf("scale=%s  htune=4  voicing {%g,%g,%g,%g}  rungs seen=%d/4\n",
+                   pass?"major":"off", expct[pass][0],expct[pass][1],expct[pass][2],expct[pass][3], distinct);
+            if (distinct != 4) bad++;
+        }
+        printf("headscale: %s\n", bad ? "FAIL" : "PASS");
+        return bad ? 1 : 0;
+    }
+
 #ifdef HAS_SPEED
     if (!strcmp(argv[1], "speed")) {
         if (argc < 3) { fprintf(stderr, "speed: rate argument?\n"); return 2; }

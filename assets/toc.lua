@@ -3,7 +3,7 @@ return {
   name    = "dirac",
   title   = "Dirac",
   author  = "nickb808",
-  version = "0.2.6",
+  version = "0.2.7",
   units   = {
     { title = "Dirac", moduleName = "Dirac", author = "nickb808" },
   },

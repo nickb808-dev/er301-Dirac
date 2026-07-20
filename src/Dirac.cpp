@@ -326,10 +326,18 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
         headGap  = (heads > 1) ? (headSpread / float(heads)) * span : 0.0f;
     }
 
-    float psprdSemi = (psprd > 0.0f) ? (randBipolar() * psprd) : 0.0f;
-    if (scaleSel > 0) psprdSemi = snapToScale(psprdSemi, scaleSel);   // quantize scatter to a scale
-    // Head transpose: heads stack in intervals (HeadTune = 7 → root, +7, +14 …).
-    const float semis     = semiShift + psprdSemi + float(head) * headTune;
+    // Pitch offset from the played root = Psprd scatter + this head's chord rung
+    // (HeadTune = 7 → root, +7, +14 …). With Scale > 0 the COMBINED offset snaps
+    // to the scale (v0.2.7): the htune ladder becomes DIATONIC — htune 4 in
+    // major voices 0-4-7-12 (a real triad, not the chromatic 0-4-8-12) — and the
+    // scatter lands on chord tones instead of smearing around them. Quantized
+    // BEFORE semiShift (same choice as v0.1.14 Psprd): the ROOT stays free —
+    // V/Oct melodies are never snapped, the voicing transposes as a fixed shape.
+    // Scale 0, or heads = 1 with any scale, is bit-identical to v0.2.6.
+    float offSemi = (psprd > 0.0f) ? (randBipolar() * psprd) : 0.0f;
+    offSemi += float(head) * headTune;
+    if (scaleSel > 0) offSemi = snapToScale(offSemi, scaleSel);
+    const float semis     = semiShift + offSemi;
     const float incL      = expf(kLog2Over12 * semis);   // 2^(semis/12), matches detuneRatio
 
     const float jit      = (posJtr > 0.0f) ? (posJtr * 4800.0f * randBipolar()) : 0.0f;

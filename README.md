@@ -5,7 +5,7 @@ the audio, windowed, pitched by playback speed, and layered.
 It runs on a **live input** by default and switches to granulating a **loaded
 sample** as soon as you select one from the card.
 
-Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.6**
+Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.7**
 
 ---
 
@@ -84,7 +84,7 @@ can run at once.
 | bin | Binaural | 0–1 / 0 | **3D depth** — adds interaural time difference (ITD) + head-shadow filtering on top of the pan, scaled by Spread. 0 = plain stereo. |
 | heads | Heads | 1–4 / 1 | **Playheads** — how many read points share the buffer. Grains are dealt round-robin between them. 1 = classic single head. *(Hidden until **Playheads → multi** in the menu.)* |
 | hsprd | HeadSpread | 0–1 / 0 | Position offset between heads. 0 = all heads stacked on the playhead; 1 = heads spaced evenly across the whole buffer/sample. |
-| htune | HeadTune | −12…+12 st / 0 | Pitch interval between heads — head *n* is transposed *n* × HeadTune. 7 = stacked fifths, 4 = major thirds, −12 = octaves down. Heads stack visibly in the grain field. |
+| htune | HeadTune | −12…+12 st / 0 | Pitch interval between heads — the chord. Chromatic ladder by default (`7` → 0-7-14-21). **With `scale` set, the ladder turns diatonic** (v0.2.7): `htune 4` + major voices a real triad 0-4-7-12; `7` gives in-scale fifths; the shape transposes with `semi`/V-Oct (the root is never snapped). |
 | level | Level | 0–1 / 0.7 | Output level. |
 | mix | Mix | 0–1 / 1 | *(Live mode only — hidden when a sample is attached.)* Wet/dry. 1 = grains, 0 = dry input through. |
 | fdbk | Feedback | 0–1 / 0 | **Regeneration** — reinjects output into the capture ring, tanh soft-clipped so it saturates into a stable drone instead of running away. **Live:** the cloud re-granulates its own output (~0.8 = clear tail, ~1 = held drone). **Sample (0.2.2+):** a feedback-sized share of grains reads the regeneration ring instead of the sample, so the cloud granulates its own tail on top of the sample. |
@@ -245,6 +245,13 @@ g++ -std=c++11 -O2 -ffast-math -Itest/host -Isrc src/Dirac.cpp test/host/main.cp
 
 ## Changelog (recent)
 
+- **0.2.7** — **Diatonic head voicing.** With Playheads → multi and a `scale`
+  selected, the `htune` interval ladder snaps into the scale: `htune 4` + major
+  = a true triad + octave (0-4-7-12), `htune 7` = in-key fifths, `htune 2` =
+  diatonic clusters. Psprd scatter joins the same quantization, landing on chord
+  tones instead of smearing chromatically. The root stays free — `semi`/V-Oct
+  transpose the voicing as a shape and melodies are never snapped to the key.
+  Scale off (or a single head) is bit-identical to 0.2.6.
 - **0.2.6** — **Fix: sample mode no longer hears the lane.** Since 0.2.2, raising
   `fdbk` with a sample attached let audio from units to the left bleed into the
   cloud (the regeneration ring was still capturing the input). The ring is now a
