@@ -133,6 +133,20 @@ public:
         age -= n * floorf(age / n);                         // wrap into [0,n)
         return 1.0f - age / n;                              // 1 = newest
     }
+    // Spawn position on the same [0,1] axis as getGrainReadPos01 — the anchor
+    // for the position-mode read-span trail (v0.2.5).
+    float getGrainSpawnPos01(int i) const {
+        const float p = mGrains[i].readPos0L;
+        if (mpSample && mEndIndex > 0) {
+            const float n = float(mEndIndex);
+            float q = p - n * floorf(p / n);
+            return q / n;
+        }
+        const float n = float(kCapBufSize);
+        float age = float(mCapWrite) - p;
+        age -= n * floorf(age / n);
+        return 1.0f - age / n;
+    }
     float getVizSpread()          const { return mVizSprd; }
     float getVizDetune()          const { return mVizDetune; }
     float getVizTexture()         const { return mCurTexture; }   // glyph shape (v0.2.0)
@@ -156,6 +170,7 @@ public:
     // NOT const: the device SDK's od::Option::value() is non-const (the host
     // stub's is const, which is why this compiled in the harness).
     bool  getDiffuseOn()                { return mDiffuseOpt.value() >= 2; }
+    bool  getFreezeOn()                 { return mFreezeOpt.value()  >= 2; }  // snowflake
     int   getCapWritePos()        const { return mCapWrite; }  // baseline crawl; parks on Freeze
     // Harness-facing accessors (v0.2.0): spawn read position + current pan
     // gains, so the host tests don't need to reach into private grain state.

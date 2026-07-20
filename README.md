@@ -5,7 +5,7 @@ the audio, windowed, pitched by playback speed, and layered.
 It runs on a **live input** by default and switches to granulating a **loaded
 sample** as soon as you select one from the card.
 
-Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.5**
+Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.6**
 
 ---
 
@@ -105,6 +105,40 @@ Below the sample tasks in the same menu:
 | Capture | run / **run** | **freeze** stops *writing* the ~2.7 s capture ring: the source material locks while every control stays live — keep scanning, pitching, and re-granulating the frozen moment. Contrast with **Hold**, which freezes the *cloud* (grains loop, no new spawns); Freeze freezes the *source* (spawning continues). Pair with `fdbk` for a self-sustaining instrument; in sample mode it stalls the regeneration ring. |
 
 ---
+
+## Reading the grain field
+
+The phosphor scope isn't decoration — every dimension of a grain's life is drawn.
+One glyph = one grain; learn the mappings and the field becomes a diagnostic:
+
+| You see | It's showing | Controls that move it |
+|---|---|---|
+| Number of glyphs | Cloud population | `dens`, `grains`, `trig` |
+| Horizontal position | Stereo placement | `sprd` (scatter width) |
+| One glyph splits into an L/R pair | Stereo detune | `detune` |
+| Vertical position | Pitch | `semi`, **V/Oct**, `psprd`, `htune` |
+| Vertical scatter collapses into discrete rows | Pitch quantization | `scale` |
+| Glyph swells and fades | The grain's envelope over its life | (grain lifecycle; slow = long `gLen`) |
+| Glyph shape: leaning wedge → arrowhead → flat-top | Envelope shape | `textr` (perc / Hann / Tukey) |
+| **Stem height under the arrowhead** | Grain length — the full Dirac-comb ↑ | `gLen` |
+| Glyph points **down** (stem above) | Reverse grain | `rev` |
+| **Hollow** outline instead of filled | Regeneration grain (reading the feedback ring, sample mode) | `fdbk` |
+| Overall brightness | The grain's real loudness | `level`, `compress`, source dynamics |
+| Some glyphs draw **dim** | Spectrally dark grains (low cutoff) — also the binaural far-ear shadow | `color`, `bin` |
+| Trails linger ~2× longer | Diffusion | **Diffuse** (menu) |
+| Whole constellation freezes | Cloud frozen (grains looping) | `hold` |
+| **✳ snowflake**, top-right — melts away when released | Capture ring frozen | **Capture: freeze** (menu) |
+
+**Shift-tap the field** to flip its X axis from stereo to *read position in the
+buffer* (the sub display shows the legend). In this view:
+
+| You see | It's showing | Controls that move it |
+|---|---|---|
+| Horizontal position | Where each grain reads in the buffer/sample | `playh`, `speed`, `posJtr` |
+| Glyphs collect onto the same spots | Onset locking | `snap` |
+| The cloud splits into evenly spaced columns | Multiple playheads | `heads`, `hsprd` |
+| **Dim trail behind each glyph** | The material the grain has covered so far — grows as it plays, leftward if reversed | `gLen`, pitch, `rev` |
+| Dashed baseline **crawls** | Capture ring recording (parks when frozen) | **Capture** (menu) |
 
 ## Feature notes
 
@@ -211,6 +245,12 @@ g++ -std=c++11 -O2 -ffast-math -Itest/host -Isrc src/Dirac.cpp test/host/main.cp
 
 ## Changelog (recent)
 
+- **0.2.6** — **Fix: sample mode no longer hears the lane.** Since 0.2.2, raising
+  `fdbk` with a sample attached let audio from units to the left bleed into the
+  cloud (the regeneration ring was still capturing the input). The ring is now a
+  pure regeneration bed in sample mode — feedback granulates only the unit's own
+  output, bootstrapped from the sample itself. Regeneration behavior is otherwise
+  unchanged, and `fdbk 0` was never affected.
 - **0.2.5** — **Every control now reaches the grain field.** Reverse grains point
   *down* (an upside-down Dirac comb); spectrally dark grains (Color, or the
   binaural head-shadow) draw dim; sample-mode regeneration grains (Feedback's
@@ -218,8 +258,14 @@ g++ -std=c++11 -O2 -ffast-math -Itest/host -Isrc src/Dirac.cpp test/host/main.cp
   afterglow — the halo you hear is the smear you see; the position-axis baseline
   crawls with the capture write head and parks when Capture is frozen; and glyph
   brightness is now the grain's *real* loudness (envelope × gain), so Level dims
-  the field and Compress visibly evens it out. Display-side only — zero audio
-  CPU change.
+  the field and Compress visibly evens it out. A small **snowflake** appears in
+  the field's top-right corner while Capture is frozen (and melts away through
+  the phosphor when you unfreeze). **Grain length now reads at a glance**: each
+  arrowhead stands on a comb stem — ↑ — whose height scales with grain length
+  (short grains are bare points, 1 s grains stand tall), and in the position
+  view each grain drags a dim trail from where it spawned to where it's
+  reading — its length as the material it actually covers, growing leftward
+  for reverse grains. Display-side only — zero audio CPU change.
 - **0.2.4** — **Removed Orbit.** It measured real (roughly double the stereo-balance
   swing, +254% image-movement rate at `dens 2 / gLen 500 ms`) but never earned its
   strip slot on hardware. Three things capped it: equal-power panning is only a ~5 dB

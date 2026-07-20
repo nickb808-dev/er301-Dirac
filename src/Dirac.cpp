@@ -557,9 +557,26 @@ void Dirac::process()
     if (!frozen) {
         const float *in = mIn.buffer();
         if (feedback > 0.0001f) {
-            for (int s = 0; s < blockSize; ++s) {
-                mCapBuf[mCapWrite] = sanitize(in[s] + feedback * mFeedBuf[s]);
-                mCapWrite = (mCapWrite + 1) & (kCapBufSize - 1);
+            if (liveMode) {
+                for (int s = 0; s < blockSize; ++s) {
+                    mCapBuf[mCapWrite] = sanitize(in[s] + feedback * mFeedBuf[s]);
+                    mCapWrite = (mCapWrite + 1) & (kCapBufSize - 1);
+                }
+            } else {
+                // Sample mode (v0.2.6 fix): the ring is a PURE regeneration bed —
+                // feedback only, NO lane input. Selecting a sample must isolate
+                // the unit from its input; v0.2.2–0.2.5 mixed `in` here too, so
+                // upstream units bled audibly into the cloud whenever fdbk was
+                // up (host-verified: silent sample + lane tone + fdbk 0.6 →
+                // output RMS 0.097; now 0). Regen self-bootstraps from the
+                // sample grains' own wet output. Trade-off: while fdbk is up in
+                // sample mode the ring tracks the regen tail, not recent input,
+                // so a detach lands on that tail instead of a warm input
+                // capture — correct, since that's what you were hearing.
+                for (int s = 0; s < blockSize; ++s) {
+                    mCapBuf[mCapWrite] = sanitize(feedback * mFeedBuf[s]);
+                    mCapWrite = (mCapWrite + 1) & (kCapBufSize - 1);
+                }
             }
         } else {
             for (int s = 0; s < blockSize; ++s) {

@@ -600,6 +600,43 @@ Recipe now documented: `dens 2 / grains 3 / gLen 500 ms / orbit 1`, then add `bi
 Corrected in README feature note, control table, quick start, and changelog.
 **Lesson: don't write performance advice from the design intent — measure it.**
 
+## v0.2.6 — FIX: sample-mode input bleed through the regen ring (2026-07)
+
+Nick heard it on hardware: sample selected, but upstream lane audio still audible.
+CONFIRMED host-side: silent sample + lane tone + fdbk 0.6 → output RMS 0.097.
+Root cause: my v0.2.2 sample-mode-feedback capture wrote `in + fb·feed` in BOTH
+modes — I'd even noted the input blend as a "bonus" at design time. Wrong call:
+selecting a sample must isolate the unit from its input. Fix: sample mode with
+fdbk > 0 writes ONLY `fb·mFeedBuf` (pure regeneration bed); regen self-bootstraps
+from the sample grains' own wet output — no external seed needed. fdbk 0 paths
+untouched (ident BIT-IDENTICAL). Trade-off accepted: while fdbk is up in sample
+mode the ring tracks the regen tail, so detach lands on that tail rather than a
+warm input capture — which matches what you were hearing anyway.
+
+Stem glow tried and REVERTED (Nick: the plain 1 px stem "looks more appealing
+the way it was prior") — glyphs this small read better crisp than soft; don't
+re-add glow/anti-aliasing to the comb stems.
+
+### PARKED: multi-playhead ideas (Nick liked all, building none for now)
+
+Discussed and deliberately shelved, in Nick's preference order:
+1. **Phasing heads** ← HIS FAVORITE — per-head scan-rate detune (1.00/0.99/…×),
+   Reich tape-loop drift from one sample; would be a third Playheads option
+   choice (single/multi/drift), zero new dials, per-head scan accumulators.
+2. **Scale-aware heads** (my top pick) — htune ladder snapped through the
+   existing Scale quantizer → diatonic chords; ~3 lines in spawnGrain.
+3. **Strum** — trigger fires all heads with 10–80 ms stagger (chord EVENT vs
+   round-robin texture).
+4. **Clock-locked taps** — live-mode head spacing = clock period (beat-synced
+   granular delay); needs a clock-source design pass first (trig double-duty?).
+When revisiting, start with Phasing.
+
+`sfbt` REWRITTEN (its old seeding relied on the bug — input entering the ring at
+fdbk 0.9): pass A is now a bleed regression (silent sample + lane tone + fdbk
+0.9 → RMS must be < 0.005; measures 0.00000), pass B verifies self-bootstrapped
+regen (granulate sample content, park playhead in silence: fdbk 0 → 0.000,
+0.9 → 0.367 sustained). Full suite + ASan/UBSan clean.
+
 ## v0.2.5 — every control reaches the field (2026-07)
 
 Nick: "each control should have some effect on the visualization." Six mappings,
@@ -621,10 +658,30 @@ dry path).
   Level scales the field, Compress evens it, source dynamics read out. Replaces
   the old pure-envelope `5 + env·10`.
 
+Also: **Freeze snowflake** (Nick's idea) — 5×5 ✳ stamped additively top-right
+each frame while frozen; holds steady, then MELTS through the phosphor decay on
+unfreeze. Deliberately the ONLY status icon: Freeze is the one menu state that's
+invisible and surprising when forgotten (ring silently ignores input); Diffuse
+shows itself in the trails, multi-head in the stacked rows. One glyph keeps the
+scope a scope. getFreezeOn() is NON-const — device SDK od::Option::value() is
+non-const (bit us once on getDiffuseOn: host stub had it const and the docker
+build failed; stub now matches the SDK).
+
+Also: **grain length made legible** (Nick: "a little more obvious"). It was
+~1.5 px of glyph size vs the envelope's 3 — swamped. Two mappings: (1) STEREO
+mode — `stemSplat`: 1 px comb stem under each arrowhead (above, for flipped
+reverse glyphs), length `lt·7` px. The Dirac-comb ↑ finally drawn whole; stems
+hang from the glyph BASE (py − size/2; base is r=0 in triSplat, and +y is UP).
+(2) POSITION mode — read-span trail: dim underline from `getGrainSpawnPos01`
+(new accessor, readPos0L on the ReadPos01 axis) to the current read position;
+grows as the grain plays, leftward when reversed; SKIPPED when |span| > 0.5
+(wrap would draw a lying full-width line). Stems skipped in position mode —
+the trail is the length cue there.
+
 Verified: header syntax-checked against throwaway od/graphics stubs (not
 committed); host suite + ASan unchanged (graphic isn't in the harness); needs
-device eyes for the aesthetics — dim floor (0.35) and crawl rate are the two
-knobs to tweak if it reads wrong.
+device eyes for the aesthetics — dim floor (0.35), crawl rate, and snowflake
+brightness (amt 12) are the knobs to tweak if it reads wrong.
 
 ### Orbit REMOVED in v0.2.4 — and why
 

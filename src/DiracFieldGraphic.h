@@ -116,6 +116,14 @@ namespace dirac
         }
       }
     }
+    // Comb stem (v0.2.5): the thin vertical line under the arrowhead — ↑ — the
+    // way a Dirac comb is actually drawn. Length = log grain length, so short
+    // grains are bare points (clicks) and long grains stand on tall stems.
+    inline void stemSplat(int w, int h, int x, int yTop, int len, int amt, bool rev)
+    {
+      for (int k = 1; k <= len; ++k)
+        addPix(w, h, x, rev ? (yTop + k) : (yTop - k), amt);
+    }
     inline void addPix(int w, int h, int x, int y, int amt)
     {
       if (x < 0 || x >= w || y < 0 || y >= h) return;
@@ -176,6 +184,8 @@ namespace dirac
           if (lt < 0.0f) lt = 0.0f; else if (lt > 1.0f) lt = 1.0f;
           int size = 1 + (int)(env * 3.0f + lt * 1.5f);          // 1..~5 px tall
           if (size > kMaxTri) size = kMaxTri;
+          // Stem length: 0 px for the shortest grains → ~7 px for 1 s+ grains.
+          const int stem = (int)(lt * 7.0f + 0.5f);
 
           int py = (int)(ny * (h - 1) + 0.5f);
 
@@ -205,7 +215,22 @@ namespace dirac
             float pos = mpGrain->getGrainReadPos01(i);
             if (!(pos == pos)) continue;                        // NaN guard
             if (pos < 0.0f) pos = 0.0f; else if (pos > 1.0f) pos = 1.0f;
-            triSplat(w, h, (int)(pos * (w - 1) + 0.5f), py, amt, size, tex, revG, hollow);
+            const int xg = (int)(pos * (w - 1) + 0.5f);
+            // Read-span trail (v0.2.5): a dim underline from WHERE THE GRAIN
+            // SPAWNED to where it's reading now — grain length as the material
+            // it actually covers. Grows as the grain plays; reverse grains grow
+            // leftward. Skipped when the span wraps the buffer edge (a line
+            // across the whole panel would lie).
+            float sp = mpGrain->getGrainSpawnPos01(i);
+            if (sp == sp && fabsf(pos - sp) <= 0.5f)
+            {
+              int xa = (int)(sp * (w - 1) + 0.5f), xb = xg;
+              if (xa > xb) { const int tswap = xa; xa = xb; xb = tswap; }
+              const int yTrail = (py > 1) ? (py - 1) : 0;
+              for (int xt = xa; xt <= xb; ++xt)
+                addPix(w, h, xt, yTrail, 3);
+            }
+            triSplat(w, h, xg, py, amt, size, tex, revG, hollow);
             continue;
           }
 
@@ -214,10 +239,15 @@ namespace dirac
           {
             triSplat(w, h, (int)(xc - splitX + 0.5f), py, amt, size, tex, revG, hollow);  // L
             triSplat(w, h, (int)(xc + splitX + 0.5f), py, amt, size, tex, revG, hollow);  // R
+            const int yBaseW = revG ? (py + (size >> 1)) : (py - (size >> 1));
+            stemSplat(w, h, (int)(xc - splitX + 0.5f), yBaseW, stem, 3 + (amt >> 2), revG);
+            stemSplat(w, h, (int)(xc + splitX + 0.5f), yBaseW, stem, 3 + (amt >> 2), revG);
           }
           else
           {
             triSplat(w, h, xc, py, amt, size, tex, revG, hollow);   // mono
+            const int yBase = revG ? (py + (size >> 1)) : (py - (size >> 1));
+            stemSplat(w, h, xc, yBase, stem, 3 + (amt >> 2), revG);
           }
         }
       }
@@ -232,6 +262,29 @@ namespace dirac
         for (int x = 0; x < w; ++x)
           if (((x - phase) & 3) < 2)
             addPix(w, h, x, 0, 3);
+      }
+
+      // Freeze indicator (v0.2.5): a 5×5 snowflake in the top-right corner while
+      // Capture is frozen — the one menu state that's invisible AND surprising
+      // when forgotten (the ring silently ignores input). Stamped additively
+      // into the phosphor every frame so it holds steady while frozen and
+      // MELTS away through the decay when you unfreeze. Other options stay
+      // icon-free on purpose: Diffuse shows itself in the trails, multi-head
+      // in the stacked pitch rows — one glyph keeps the scope a scope.
+      if (mpGrain && mpGrain->getFreezeOn() && w >= 8 && h >= 8)
+      {
+        static const uint8_t kFlake[5] = {  // ✳ plus + diagonal tips, 5×5
+          0b10101,
+          0b00100,
+          0b11111,
+          0b00100,
+          0b10101,
+        };
+        const int x0 = w - 7, y0 = h - 7;   // top-right, 2 px in from the edge
+        for (int r = 0; r < 5; ++r)
+          for (int c = 0; c < 5; ++c)
+            if (kFlake[r] & (1u << (4 - c)))
+              addPix(w, h, x0 + c, y0 + 4 - r, 12);
       }
 
       // Background + phosphor render (monochrome; v is the 4-bit intensity).

@@ -447,37 +447,62 @@ int main(int argc, char **argv)
         return pass ? 0 : 1;
     }
 
-    // ── sfbt: sample-mode feedback — regen grains sustain a tail ────────────
-    // SILENT sample: with fdbk 0 every grain reads silence (output 0); with
-    // fdbk 0.9 the ring (seeded by 20 blocks of live input) regenerates.
+    // ── sfbt: sample-mode feedback — regen without lane bleed (v0.2.6) ──────
+    // A: BLEED regression — silent sample + tone on the lane input + fdbk 0.9:
+    //    output must stay silent (v0.2.2–0.2.5 mixed lane input into the regen
+    //    ring, so upstream units bled into the cloud whenever fdbk was up).
+    // B: regen still works, self-bootstrapped from the SAMPLE — content in the
+    //    first 10%, granulate it (wet fills the ring via feedback), then move
+    //    the playhead to silence: fdbk 0 dies, fdbk 0.9 sustains the tail.
     if (!strcmp(argv[1], "sfbt")) {
         const int N = 48000;
-        std::vector<float> st(N, 0.0f);
-        od::Sample smp; smp.mSampleCount = N; smp.mChannelCount = 1; smp.mpData = st.data();
-        double late[2]; int nf = 0;
-        for (int pass = 0; pass < 2; ++pass) {
+        int nf = 0;
+        double bleed = 0.0;
+        {   // A: bleed check
+            std::vector<float> st(N, 0.0f);
+            od::Sample smp; smp.mSampleCount = N; smp.mChannelCount = 1; smp.mpData = st.data();
             Dirac d; rng = 0x5fb7; d.setSample(&smp);
             Ctl c[] = {{"Playhead",0.5f},{"Rate",8.0f},{"GrainLen",0.15f},{"Grains",16.0f},
-                       {"Level",0.9f},{"Texture",0.5f},{"Feedback",pass?0.9f:0.0f}};
+                       {"Level",0.9f},{"Texture",0.5f},{"Feedback",0.9f}};
             setInputs(d, c, sizeof(c)/sizeof(c[0]));
-            for (int b = 0; b < 20; ++b) {              // seed the ring
-                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx)
-                    d.mIn.buffer()[sIdx] = 0.5f * sinf(2.0f * 3.14159265f * 220.0f
-                                            * (b * FRAMELENGTH + sIdx) / 48000.0f);
-                d.process();
-            }
             double acc = 0.0; long n = 0;
             for (int b = 0; b < 600; ++b) {
-                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx) d.mIn.buffer()[sIdx] = 0.0f;
+                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx)
+                    d.mIn.buffer()[sIdx] = 0.5f * sinf(2.0f * 3.14159265f * 330.0f
+                                            * (b * FRAMELENGTH + sIdx) / 48000.0f);
                 d.process();
-                float *L = d.mOutL.buffer(), *R = d.mOutR.buffer();
+                float *L = d.mOutL.buffer();
                 for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx) {
-                    if (!std::isfinite(L[sIdx]) || !std::isfinite(R[sIdx])) nf++;
+                    if (!std::isfinite(L[sIdx])) nf++;
+                    if (b >= 100) { acc += double(L[sIdx]) * L[sIdx]; n++; } } }
+            bleed = n ? sqrt(acc / n) : 0.0;
+            printf("bleed check: silent sample + lane tone, fdbk 0.9 -> RMS %.5f\n", bleed);
+        }
+        double late[2];
+        for (int pass = 0; pass < 2; ++pass) {   // B: self-bootstrapped regen
+            std::vector<float> st(N, 0.0f);
+            for (int i = 0; i < N / 10; ++i)
+                st[i] = 0.7f * sinf(2.0f * 3.14159265f * 220.0f * i / 48000.0f);
+            od::Sample smp; smp.mSampleCount = N; smp.mChannelCount = 1; smp.mpData = st.data();
+            Dirac d; rng = 0x5fb8; d.setSample(&smp);
+            Ctl c[] = {{"Playhead",0.05f},{"Rate",8.0f},{"GrainLen",0.15f},{"Grains",16.0f},
+                       {"Level",0.9f},{"Texture",0.5f},{"Feedback",pass?0.9f:0.0f}};
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            for (int b = 0; b < 100; ++b) d.process();       // granulate the content
+            Ctl mv[] = {{"Playhead",0.6f}}; setInputs(d, mv, 1);  // park in silence
+            double acc = 0.0; long n = 0;
+            for (int b = 0; b < 600; ++b) {
+                d.process();
+                float *L = d.mOutL.buffer();
+                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx) {
+                    if (!std::isfinite(L[sIdx])) nf++;
                     if (b >= 100) { acc += double(L[sIdx]) * L[sIdx]; n++; } } }
             late[pass] = n ? sqrt(acc / n) : 0.0;
-            printf("sample-fdbk=%.1f  late RMS = %.5f\n", pass ? 0.9f : 0.0f, late[pass]);
+            printf("regen: playhead in silence, fdbk=%.1f -> late RMS %.5f\n",
+                   pass ? 0.9f : 0.0f, late[pass]);
         }
-        const bool pass = late[1] > 20.0 * std::max(late[0], 1e-6)
+        const bool pass = bleed < 0.005 && late[0] < 0.005
+                       && late[1] > 20.0 * std::max(late[0], 1e-6)
                        && late[1] < 10.0 && nf == 0;
         printf("sfbt: %s\n", pass ? "PASS" : "FAIL");
         return pass ? 0 : 1;
