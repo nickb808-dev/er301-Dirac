@@ -2,8 +2,8 @@
 
 A **granular synthesizer** for the ER-301 named after [Paul Dirac](https://en.wikipedia.org/wiki/Paul_Dirac). Dirac chops a sound into short overlapping grains, each read straight from
 the audio, windowed, pitched by playback speed, and layered.
-It runs on a **live input** by default and switches to granulating a **loaded
-sample** as soon as you select one from the card.
+It runs on a live input by default and switches to granulating a loaded
+sample as soon as you select one from the card.
 
 Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.8**
 
