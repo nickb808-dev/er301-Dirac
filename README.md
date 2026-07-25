@@ -68,26 +68,26 @@ can run at once.
 | speed | Speed | −4…+4 / 0 | *(Sample mode only — hidden in live mode.)* **Playhead scan rate** — decouples time from pitch. 0 = parked (playh is the position, as before); 1 = original tempo; negative = reverse; wraps at the ends. Touching playh re-seats the scan. |
 | dens | Rate | 0–16 / 3 | **Density** — target grain overlap (how many deep). 0 = trigger-only (free-run off). |
 | gLen | GrainLen | 1 ms – 1 s / 50 ms | Grain length. |
-| grains | Grains | 1–16 / 12 | Polyphony limit / Number of overlapping grains. |
+| grains | Grains | 1–16 / 12 | Polyphony limit / number of overlapping grains. |
 | semi | SemiShift | −24…+24 st / 0 | Coarse transpose knob (integer semitones, playback-speed pitch). |
-| V/oct | V/Oct | 1 V/oct / 0 | Continuous pitch CV — patch a 1 V/oct source here; summed with SemiShift, clamped ±4 octaves. |
+| V/oct | V/Oct | 1 V/oct / 0 | Continuous pitch CV. Patch a 1 V/oct source here. This is summed with SemiShift and limited to ±4 octaves. |
 | psprd | Psprd | 0–12 st / 0 | Per-grain pitch scatter. |
 | scale | Scale | 0–6 / 0 | Quantize the Psprd scatter to a scale: 0 off · 1 chromatic · 2 major · 3 minor · 4 penta-maj · 5 penta-min · 6 whole-tone. |
-| detun | Detune | 0–0.5 st / 0 | Stereo detune — R read pitched vs L for width. |
-| sprd | Spread | 0–1 / 0.5 | Stereo position scatter across grains (also the binaural **width**). |
+| detun | Detune | 0–0.5 st / 0 | Stereo detune. |
+| sprd | Spread | 0–1 / 0.5 | Stereo position scatter across grains (also the binaural width). |
 | posJtr | PosJtr | 0–1 / 0 | Random spray of each grain's read position (±100 ms). |
 | rev | RevProb | 0–1 / 0 | Probability a grain plays in reverse. |
 | textr | Texture | 0–1 / 0.5 | Grain envelope shape: **Percussive (0) → Hann (0.5) → Tukey (1)**. |
-| snap | Snap | 0–1 / 0 | **Onset lock** — pulls each grain's read position onto the nearest transient instead of wherever the metronome landed. 0 = free (classic), 1 = locked. Turns a smear of a drum loop back into hits. |
-| color | Color | 0–1 / 0 | **Cutoff scatter** — each grain draws a random low-pass cutoff, darker with Color (20 kHz down to ~600 Hz at 1). The spectral Psprd: dark and bright grains interleave in one cloud. |
-| comp | Compress | 0–1 / 0 | **Per-grain leveling** — boosts quiet source bits / tames loud ones (±12 dB) so sparse clouds stay even. |
-| bin | Binaural | 0–1 / 0 | **3D depth** — adds interaural time difference (ITD) + head-shadow filtering on top of the pan, scaled by Spread. 0 = plain stereo. |
-| heads | Heads | 1–4 / 1 | **Playheads** — how many read points share the buffer. Grains are dealt round-robin between them. 1 = classic single head. *(Hidden until **Playheads → multi** in the menu.)* |
+| snap | Snap | 0–1 / 0 | This pulls each grain's read position onto the nearest transient instead of wherever the metronome landed. 0 = free (classic), 1 = locked. Turns a smear of a drum loop back into hits. |
+| color | Color | 0–1 / 0 | Each grain draws a random low-pass cutoff, darker with Color (20 kHz down to ~600 Hz at 1). The spectral version of psprd. |
+| comp | Compress | 0–1 / 0 | Per-grain leveling that boosts quiet source bits and tames loud ones (±12 dB) so sparse clouds stay even. |
+| bin | Binaural | 0–1 / 0 | Gives 3D depth by way of interaural time difference (ITD) + head-shadow filtering on top of the pan, scaled by Spread. 0 = plain stereo. |
+| heads | Heads | 1–4 / 1 | The number of playheads sharing the buffer. Grains are dealt round-robin between them. 1 = classic single head. *(Hidden until **Playheads → multi** is set in the config menu.)* |
 | hsprd | HeadSpread | 0–1 / 0 | Position offset between heads. 0 = all heads stacked on the playhead; 1 = heads spaced evenly across the whole buffer/sample. |
-| htune | HeadTune | −12…+12 st / 0 | Pitch interval between heads — the chord. Chromatic ladder by default (`7` → 0-7-14-21). **With `scale` set, the ladder turns diatonic** (v0.2.7): `htune 4` + major voices a real triad 0-4-7-12; `7` gives in-scale fifths; the shape transposes with `semi`/V-Oct (the root is never snapped). |
+| htune | HeadTune | −12…+12 st / 0 | Pitch interval between heads that can form a chord. Chromatic ladder by default (`7` → 0-7-14-21). With `scale` set, the ladder turns diatonic (v0.2.7): `htune 4` + major voices a real triad 0-4-7-12; `7` gives in-scale fifths; the shape transposes with `semi`/V-Oct (the root is never snapped). |
 | level | Level | 0–1 / 0.7 | Output level. |
 | mix | Mix | 0–1 / 1 | *(Live mode only — hidden when a sample is attached.)* Wet/dry. 1 = grains, 0 = dry input through. |
-| fdbk | Feedback | 0–1 / 0 | **Regeneration** — reinjects output into the capture ring, tanh soft-clipped so it saturates into a stable drone instead of running away. **Live:** the cloud re-granulates its own output (~0.8 = clear tail, ~1 = held drone). **Sample (0.2.2+):** a feedback-sized share of grains reads the regeneration ring instead of the sample, so the cloud granulates its own tail on top of the sample. |
+| fdbk | Feedback | 0–1 / 0 | This reinjects output into the capture ring, tanh soft-clipped so it saturates into a stable drone. With live input the cloud re-granulates its own output (~0.8 = clear tail, ~1 = held drone). When working with a sample file a feedback-sized share of grains reads the regeneration ring instead of the sample, so the cloud granulates its own tail on top of the sample. |
 
 ### Sample menu
 
@@ -100,9 +100,9 @@ Below the sample tasks in the same menu:
 
 | Option | Choices / default | What it does |
 |---|---|---|
-| Playheads | single / **single** | **multi** reveals the `heads` / `hsprd` / `htune` controls: grains are dealt round-robin to up to 4 playheads reading the same buffer at offset positions and stacked pitch intervals (`htune 7` = fifths, `−12` = octaves down). **single** hides the controls and hard-bypasses the DSP path. |
-| Diffuse | off / **off** | **on** runs the wet output through four cascaded allpasses per channel (~49 ms, different delays L/R) — smears grain edges into a lush halo, and feeds the regeneration loop so Feedback smears too. Off is a hard bypass. |
-| Capture | run / **run** | **freeze** stops *writing* the ~2.7 s capture ring: the source material locks while every control stays live — keep scanning, pitching, and re-granulating the frozen moment. Contrast with **Hold**, which freezes the *cloud* (grains loop, no new spawns); Freeze freezes the *source* (spawning continues). Pair with `fdbk` for a self-sustaining instrument; in sample mode it stalls the regeneration ring. |
+| Playheads | single / **single** | 'multi' reveals the `heads` / `hsprd` / `htune` controls: grains are dealt round-robin to up to 4 playheads reading the same buffer at offset positions and stacked pitch intervals (`htune 7` = fifths, `−12` = octaves down). 'single' hides the controls and hard-bypasses the DSP path. |
+| Diffuse | off / 'off' | 'on' runs the wet output through four cascaded allpasses per channel (~49 ms, different delays L/R) — smears grain edges into a lush halo, and feeds the regeneration loop so Feedback smears too. Off is a hard bypass. |
+| Capture | run / 'run' | 'freeze' stops *writing* the ~2.7 s capture ring: the source material locks while every control stays live — keep scanning, pitching, and re-granulating the frozen moment. Contrast with Hold, which freezes the *cloud* (grains loop, no new spawns); Freeze freezes the *source* (spawning continues). Pair with `fdbk` for a self-sustaining instrument; in sample mode it stalls the regeneration ring. |
 
 ---
 
@@ -124,12 +124,12 @@ One glyph = one grain; learn the mappings and the field becomes a diagnostic:
 | Glyph points **down** (stem above) | Reverse grain | `rev` |
 | **Hollow** outline instead of filled | Regeneration grain (reading the feedback ring, sample mode) | `fdbk` |
 | Overall brightness | The grain's real loudness | `level`, `compress`, source dynamics |
-| Some glyphs draw **dim** | Spectrally dark grains (low cutoff) — also the binaural far-ear shadow | `color`, `bin` |
+| Some glyphs are more **dim** | Spectrally dark grains (low cutoff) — also the binaural far-ear shadow | `color`, `bin` |
 | Trails linger ~2× longer | Diffusion | **Diffuse** (menu) |
 | Whole constellation freezes | Cloud frozen (grains looping) | `hold` |
-| **✳ snowflake**, top-right — melts away when released | Capture ring frozen | **Capture: freeze** (menu) |
+| **✳ snowflake**, top-right — Capture ring frozen | **Capture: freeze** (menu) |
 
-**Shift-tap the field** to flip its X axis from stereo to *read position in the
+Shift-tap the field to flip its X axis from stereo to *read position in the
 buffer* (the sub display shows the legend). In this view:
 
 | You see | It's showing | Controls that move it |
@@ -137,8 +137,8 @@ buffer* (the sub display shows the legend). In this view:
 | Horizontal position | Where each grain reads in the buffer/sample | `playh`, `speed`, `posJtr` |
 | Glyphs collect onto the same spots | Onset locking | `snap` |
 | The cloud splits into evenly spaced columns | Multiple playheads | `heads`, `hsprd` |
-| **Dim trail behind each glyph** | The material the grain has covered so far — grows as it plays, leftward if reversed | `gLen`, pitch, `rev` |
-| Dashed baseline **crawls** | Capture ring recording (parks when frozen) | **Capture** (menu) |
+| Dim trail behind each glyph | The material the grain has covered so far — grows as it plays, leftward if reversed | `gLen`, pitch, `rev` |
+| Dashed baseline crawls | Capture ring recording (parks when frozen) | Capture (menu) |
 
 ## Feature notes
 
@@ -149,7 +149,7 @@ keeps it bounded — push it for evolving drones and infinite smears.
 
 **Binaural.** Each grain's pan position becomes an azimuth: the far ear's read is
 delayed by up to ±31 samples (ITD) and rolled off by a one-pole head-shadow lowpass
-(20 kHz → 4 kHz toward the side). **Spread** sets the width, **Binaural** the depth;
+(20 kHz → 4 kHz toward the side). Spread sets the width, Binaural the depth;
 at 0 it's bit-identical plain stereo.
 
 **Snap (onset lock).** Granulating rhythmic material normally lands in the gaps as
@@ -183,8 +183,8 @@ proper slot in the strip, not the end, and the state is reconciled on preset loa
 including sample-less presets, which never fire the attach path.
 
 **Grain field: shift-tap to change the X axis.** The field normally plots each grain
-at its **stereo position**. Tap **shift** while the cursor is on the field and the X
-axis becomes **read position in the buffer/sample** — where each grain is actually
+at its stereo position. Tap shift while the cursor is on the field and the X
+axis becomes read position in the buffer/sample — where each grain is actually
 reading — with the sub display swapping from the Dirac epigraph to an axis legend.
 Tap shift again to go back.
 
@@ -208,7 +208,7 @@ bindings. A shift *tap* is distinguished from shift-as-a-modifier, so holding sh
 for something else never flips the axis. The mode is a view preference — it isn't
 saved with the preset.
 
-**Visualizer.** The grain-field display draws each grain as an upward **triangle** —
+**Visualizer.** The grain-field display draws each grain as an upward triangle —
 a Dirac-comb impulse — at its stereo position (horizontal) and pitch (vertical); the
 triangle pulses with the grain's envelope and leaves a phosphor afterglow as grains
 decay. (Impulse triangles are Dirac's signature.)
@@ -223,7 +223,7 @@ make dist ER301_SDK=~/er-301      # → build/am335x/dirac-<version>.pkg
 ```
 
 Requires Docker (cross-compiles for the AM3358 / Cortex-A8). Bump `VERSION` in the
-`Makefile` **and** `assets/toc.lua` on every flash — the firmware caches the `.so`
+`Makefile` and `assets/toc.lua` on every flash — the firmware caches the `.so`
 per version.
 
 ### Host test harness
