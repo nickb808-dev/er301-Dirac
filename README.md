@@ -64,7 +64,7 @@ can run at once.
 | trig | Fire | gate | Spawns one grain per rising edge (manual button or patched gate). |
 | hold | Hold | toggle | Freezes the current grains into a looping, frozen cloud. |
 | playh | Playhead | 0–1 / 0 | **Sample:** read position. **Live:** how far back in the buffer grains read — also the **feedback delay** (0 = most recent / tight, 1 = oldest / long echo). |
-| speed | Speed | −4…+4 / 0 | *(Sample mode only — hidden in live mode.)* **Playhead scan rate** — decouples time from pitch. 0 = parked (playh is the position, as before); 1 = original tempo; negative = reverse; wraps at the ends. Touching playh re-seats the scan. |
+| speed | Speed | −4…+4 / 0 | *(Sample mode only. Hidden in live mode.)* **Playhead scan rate** — decouples time from pitch. 0 = parked (playh is the position, as before); 1 = original tempo; negative = reverse; wraps at the ends. Touching playh re-seats the scan. |
 | dens | Rate | 0–16 / 3 | **Density** — target grain overlap (how many deep). 0 = trigger-only (free-run off). |
 | gLen | GrainLen | 1 ms – 1 s / 50 ms | Grain length. |
 | grains | Grains | 1–16 / 12 | Polyphony limit / number of overlapping grains. |
