@@ -68,7 +68,7 @@ can run at once.
 | speed | Speed | −4…+4 / 0 | *(Sample mode only — hidden in live mode.)* **Playhead scan rate** — decouples time from pitch. 0 = parked (playh is the position, as before); 1 = original tempo; negative = reverse; wraps at the ends. Touching playh re-seats the scan. |
 | dens | Rate | 0–16 / 3 | **Density** — target grain overlap (how many deep). 0 = trigger-only (free-run off). |
 | gLen | GrainLen | 1 ms – 1 s / 50 ms | Grain length. |
-| grains | Grains | 1–16 / 12 | Polyphony cap — how many grains may overlap at once. |
+| grains | Grains | 1–16 / 12 | Polyphony limit - Number of overlapping grains. |
 | semi | SemiShift | −24…+24 st / 0 | Coarse transpose knob (integer semitones, playback-speed pitch). |
 | V/oct | V/Oct | 1 V/oct / 0 | Continuous pitch CV — patch a 1 V/oct source here; summed with SemiShift, clamped ±4 octaves. |
 | psprd | Psprd | 0–12 st / 0 | Per-grain pitch scatter. |
