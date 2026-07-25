@@ -47,7 +47,7 @@ cost almost nothing. Long grains and dense clouds are cheap, no per-grain buffer
 8. For chords, switch Playheads → multi in the menu (sub-display button) to
    reveal **heads** / **hsprd** / **htune**. `htune = 7` stacks fifths, `4` major
    thirds, `−12` octaves down.
-9. Put the cursor on the grain field visual and tap shift — the X axis flips from
+9. Put the cursor on the grain field visual and tap shift. The X axis flips from
     stereo position to *read position in the buffer*, so you can watch where grains
     are actually reading. Tap again to flip back. This is the view that makes Snap
     and multiple playheads legible.
