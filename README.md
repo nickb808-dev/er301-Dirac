@@ -12,7 +12,7 @@ Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.
 ## How it works
 
 Each grain reads a short window of the source with linear interpolation, multiplies
-it by an envelope, and plays it back — at a different speed to transpose. Many grains
+it by an envelope, and plays it back. Many grains
 overlap into a continuous texture. Because it's time-domain, pitch shifting moves
 formants (the characteristic granular shimmer), transients stay sharp, and grains
 cost almost nothing. Long grains and dense clouds are cheap, no per-grain buffers.
@@ -20,35 +20,34 @@ cost almost nothing. Long grains and dense clouds are cheap, no per-grain buffer
 **Two source modes (automatic):**
 
 - **Live** (no sample loaded) — Dirac captures the input into a ~2.7 s rolling ring
-  buffer and granulates that. This is where **Feedback**, **Mix**, and the buffer
+  buffer and granulates that. This is where Feedback, Mix, and the buffer
   scan live.
 - **Sample** (select one from the menu) — Dirac granulates the loaded sample at a
-  movable **Playhead**, drawn on the waveform display.
+  movable Playhead, drawn on the waveform display.
 
 ---
 
 ## Quick start
 
-1. Add **Dirac**, patch in audio. You'll hear a cloud immediately — **Density**
+1. Add Dirac, patch in audio. You'll hear a cloud immediately. Density
    defaults to 3 and free-runs, so grains spawn on their own.
-2. **gLen** sets grain size and **grains** sets how many overlap: short + sparse is
+2. gLen sets grain size and grains sets how many overlap: short + sparse is
    pointillistic; long + dense is a smooth wash.
-3. **Texture** shapes each grain: turn it **down** for crisp percussive "bits," leave
+3. Texture shapes each grain: turn it down for crisp percussive "bits," leave
    it centered for a rounded Hann, turn it **up** for a fuller flat-top grain.
-4. In live mode, **fdbk** (Feedback) is the magic knob — turn it up and the cloud
-   regenerates and sustains after the input stops (drones, smears, infinite textures).
-   **playh** sets the feedback delay / how far back in the buffer grains read.
-5. Load a sample from the menu to granulate a recording; sweep **playh** through it.
-6. Patch a gate into **trig** for rhythmic grains, or set **Density** to 0 for
+4. In live mode, fdbk regenerates and sustains grains after the input stops (drones, smears, infinite textures).
+   playh sets the feedback delay / how far back in the buffer grains read.
+5. Load a sample from the menu to granulate a recording; sweep playh through it.
+6. Patch a gate into **trig** for rhythmic grains, or set Density to 0 for
    trigger-only.
-7. Granulating a beat? Turn **snap** up — grains lock onto the transients instead of
-   landing in the gaps. Try it alongside **posJtr** at 1: the jitter sprays the reads
+7. Granulating a beat? Turn snap up and grains lock onto the transients instead of
+   landing in the gaps. Try it alongside posJtr at 1: the jitter sprays the reads
    wide and Snap reels each one back onto a hit, so you get variety in *which* hit
    rather than a comb of identical reads.
-8. For chords, switch **Playheads → multi** in the menu (sub-display button) to
+8. For chords, switch Playheads → multi in the menu (sub-display button) to
    reveal **heads** / **hsprd** / **htune**. `htune = 7` stacks fifths, `4` major
    thirds, `−12` octaves down.
-9. Put the cursor on the **grain field** and **tap shift** — the X axis flips from
+9. Put the cursor on the grain field visual and tap shift — the X axis flips from
     stereo position to *read position in the buffer*, so you can watch where grains
     are actually reading. Tap again to flip back. This is the view that makes Snap
     and multiple playheads legible.
@@ -57,7 +56,7 @@ cost almost nothing. Long grains and dense clouds are cheap, no per-grain buffer
 
 ## Controls
 
-Spawning is **density-driven** (free-run) plus **trigger** edges, decoupled — both
+Spawning is density-driven (free-run) plus trigger edges, decoupled — both
 can run at once.
 
 | Btn | Inlet | Range / default | What it does |
