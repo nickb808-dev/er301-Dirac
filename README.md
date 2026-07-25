@@ -65,7 +65,7 @@ can run at once.
 | hold | Hold | toggle | Freezes the current grains into a looping, frozen cloud. |
 | playh | Playhead | 0–1 / 0 | **Sample:** read position. **Live:** how far back in the buffer grains read — also the **feedback delay** (0 = most recent / tight, 1 = oldest / long echo). |
 | speed | Speed | −4…+4 / 0 | *(Sample mode only. Hidden in live mode.)* **Playhead scan rate** — decouples time from pitch. 0 = parked (playh is the position, as before); 1 = original tempo; negative = reverse; wraps at the ends. Touching playh re-seats the scan. |
-| dens | Rate | 0–16 / 3 | **Density** — target grain overlap (how many deep). 0 = trigger-only (free-run off). |
+| dens | Rate | 0–16 / 3 | Density is target grain overlap (how many deep). 0 = trigger-only (free-run off). |
 | gLen | GrainLen | 1 ms – 1 s / 50 ms | Grain length. |
 | grains | Grains | 1–16 / 12 | Polyphony limit / number of overlapping grains. |
 | semi | SemiShift | −24…+24 st / 0 | Coarse transpose knob (integer semitones, playback-speed pitch). |
