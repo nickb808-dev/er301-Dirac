@@ -270,6 +270,15 @@ private:
     int  mApIdxL[kApStages] = {0}, mApIdxR[kApStages] = {0};
     bool mDiffusePrimed = false;   // buffers hold energy → clear once on Off
 
+    /* ── Feedback DC-blocker (v0.2.8) ──────────────────────────────────────── */
+    // One-pole high-pass (~20 Hz) on the mono sum BEFORE the tanh. Without it
+    // the loop integrates DC/sub-audio (granular overlap-AM has strong LF
+    // content); the pedestal rails the tanh, whose small-signal slope then
+    // squeezes the actual audio to nothing — "fades out like an overload".
+    // Multi-head made it faster (LF sums coherently across all taps; audio
+    // combs), which is how it was found.
+    float mFbHpX = 0.0f, mFbHpY = 0.0f;
+
     /* ── PRNG ───────────────────────────────────────────────────────────── */
     uint32_t mRandState = 0x1234abcdu;
     float randUnipolar();

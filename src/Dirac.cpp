@@ -846,13 +846,28 @@ void Dirac::process()
     // no runaway. Host-tuned: 0=silent, ~0.8=clear tail, ~1=stable drone.
     if (feedback > 0.0001f && !frozen) {
         const float drive = 2.5f;
-        for (int s = 0; s < blockSize; ++s)
-            mFeedBuf[s] = sanitize(tanhf(drive * 0.5f * (outL[s] + outR[s])));
+        // Loop high-pass, fc ≈ 120 Hz @ 48 kHz (v0.2.8). Not just a DC blocker:
+        // the tanh RE-CREATES low-frequency intermodulation products every pass
+        // (difference tones between the dense grain partials), and with multiple
+        // heads the audio band combs to ~half loop gain while LF keeps winning —
+        // the pedestal rails the tanh and squeezes the audio out ("fades like an
+        // overload"). Host sweep 20/60/120 Hz: at 120 the 4-head audio fraction
+        // holds at 0.45 after 60 s (0.18 at 20 Hz), pedestal 0.023. Same corner
+        // class as the Clouds feedback path. Sonic cost: the LOOP thins below
+        // ~120 Hz per pass; single passes keep full bandwidth.
+        const float aHp   = 0.98429f;
+        for (int s = 0; s < blockSize; ++s) {
+            const float mono = 0.5f * (outL[s] + outR[s]);
+            const float hp   = mono - mFbHpX + aHp * mFbHpY;   // y = x − x₁ + a·y₁
+            mFbHpX = mono; mFbHpY = hp;
+            mFeedBuf[s] = sanitize(tanhf(drive * hp));
+        }
         mFeedPrimed = true;
     } else if (mFeedPrimed) {
         // Leaving the feedback path: clear so re-entering doesn't inject one block
         // of stale audio from whenever feedback last ran.
         std::fill(mFeedBuf.begin(), mFeedBuf.end(), 0.0f);
+        mFbHpX = 0.0f; mFbHpY = 0.0f;   // v0.2.8: don't carry stale HP state back in
         mFeedPrimed = false;
     }
 

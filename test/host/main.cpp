@@ -547,6 +547,49 @@ int main(int argc, char **argv)
         return bad ? 1 : 0;
     }
 
+    // ── fbdc: multi-head feedback must not drown in LF (v0.2.8 regression) ──
+    // Live mode, 4 heads, fdbk 0.95, tone+noise held for ~40 s. Without the
+    // 120 Hz loop high-pass the output degenerates to an LF pedestal: audio
+    // fraction (first-difference ratio) decayed to ~0.18 and |block mean| hit
+    // ~0.24 — the user-reported "fades out like an overload".
+    if (!strcmp(argv[1], "fbdc")) {
+        Dirac d; rng = 0x1234;
+        d.mMultiHeadOpt.set(2);
+        Ctl c[] = {{"Playhead",0.1f},{"Rate",4.0f},{"Grains",12.0f},{"GrainLen",0.2f},
+                   {"Level",0.7f},{"Texture",0.5f},{"Feedback",0.95f},{"Spread",0.5f},
+                   {"Mix",1.0f},{"Heads",4.0f},{"HeadSpread",0.5f}};
+        setInputs(d, c, sizeof(c)/sizeof(c[0]));
+        double rms = 0.0, dc = 0.0, hf = 0.0; long n = 0; float prev = 0.0f; long dcN = 0;
+        const int B = 15000;                       // ~40 s
+        int nf = 0;
+        for (int b = 0; b < B; ++b) {
+            for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx) {
+                const int nn = b * FRAMELENGTH + sIdx;
+                d.mIn.buffer()[sIdx] = 0.3f * sinf(2.0f * 3.14159265f * 220.0f * nn / 48000.0f)
+                                     + 0.15f * frand();
+            }
+            d.process();
+            if (b >= B - 3000) {                   // last ~8 s
+                float *L = d.mOutL.buffer();
+                double m = 0.0;
+                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx) {
+                    if (!std::isfinite(L[sIdx])) nf++;
+                    const float df = L[sIdx] - prev;
+                    rms += double(L[sIdx]) * L[sIdx]; hf += double(df) * df;
+                    m += L[sIdx]; prev = L[sIdx]; n++;
+                }
+                dc += fabs(m / FRAMELENGTH); dcN++;
+            }
+        }
+        const double hfFrac = (rms > 0.0) ? sqrt(hf / rms) : 0.0;
+        const double dcAvg  = dcN ? dc / dcN : 0.0;
+        printf("fbdc: 4 heads, fdbk 0.95, 40 s -> RMS %.3f  |blockDC| %.3f  audioFrac %.3f\n",
+               sqrt(rms / n), dcAvg, hfFrac);
+        const bool pass = hfFrac > 0.35 && dcAvg < 0.06 && sqrt(rms / n) > 0.1 && nf == 0;
+        printf("fbdc: %s\n", pass ? "PASS" : "FAIL");
+        return pass ? 0 : 1;
+    }
+
 #ifdef HAS_SPEED
     if (!strcmp(argv[1], "speed")) {
         if (argc < 3) { fprintf(stderr, "speed: rate argument?\n"); return 2; }

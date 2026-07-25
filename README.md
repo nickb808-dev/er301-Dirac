@@ -5,7 +5,7 @@ the audio, windowed, pitched by playback speed, and layered.
 It runs on a **live input** by default and switches to granulating a **loaded
 sample** as soon as you select one from the card.
 
-Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.7**
+Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.8**
 
 ---
 
@@ -245,6 +245,17 @@ g++ -std=c++11 -O2 -ffast-math -Itest/host -Isrc src/Dirac.cpp test/host/main.cp
 
 ## Changelog (recent)
 
+- **0.2.8** — **Fix: feedback no longer fades out into an "overload"** (worst
+  with multiple playheads). The regeneration loop was slowly filling with
+  low-frequency energy the saturator kept re-creating; the pedestal railed the
+  tanh and squeezed the audible signal to nothing over tens of seconds. The
+  feedback path now has a ~120 Hz high-pass inside the loop (the same medicine
+  Clouds uses): long-run audio content holds steady where it previously decayed
+  to a sixth. Regeneration tails thin slightly below 120 Hz per pass — single
+  passes keep full bandwidth. Also worth knowing: engaging **multi playheads
+  drops the level a few dB by nature** (four decorrelated read positions
+  power-sum where one head's overlapping grains amplitude-sum — chorus physics,
+  not a bug); compensate with `level`.
 - **0.2.7** — **Diatonic head voicing.** With Playheads → multi and a `scale`
   selected, the `htune` interval ladder snaps into the scale: `htune 4` + major
   = a true triad + octave (0-4-7-12), `htune 7` = in-key fifths, `htune 2` =
