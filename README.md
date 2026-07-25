@@ -119,7 +119,7 @@ One glyph = one grain; learn the mappings and the field becomes a diagnostic:
 | Vertical scatter collapses into discrete rows | Pitch quantization | `scale` |
 | Glyph swells and fades | The grain's envelope over its life | (grain lifecycle; slow = long `gLen`) |
 | Glyph shape: leaning wedge → arrowhead → flat-top | Envelope shape | `textr` (perc / Hann / Tukey) |
-| **Stem height under the arrowhead** | Grain length is the full [Dirac comb](https://en.wikipedia.org/wiki/Dirac_comb) ↑ | `gLen` |
+| **Stem height under the arrowhead** | Grain length increase produces a taller [Dirac comb](https://en.wikipedia.org/wiki/Dirac_comb) ↑ | `gLen` |
 | Glyph points **down** (stem above) | Reverse grain | `rev` |
 | **Hollow** outline instead of filled | Regeneration grain (reading the feedback ring, sample mode) | `fdbk` |
 | Overall brightness | The grain's real loudness | `level`, `compress`, source dynamics |
