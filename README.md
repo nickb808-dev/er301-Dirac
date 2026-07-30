@@ -215,6 +215,14 @@ decay. (Impulse triangles are Dirac's signature.)
 
 ---
 
+## License
+
+Dirac is licensed under the **Apache License 2.0** — free to use, modify, and
+embed, including commercially. If you distribute Dirac, a derivative, or a
+product that embeds it, the license requires you to include the `LICENSE` and
+`NOTICE` files with your distribution — that NOTICE carries the attribution.
+In plain terms: **use it in your product, credit the source.**
+
 ## Build
 
 ```bash
