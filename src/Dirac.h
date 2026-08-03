@@ -1,4 +1,6 @@
 /* Dirac.h — Classic (time-domain) Granular Synthesizer for the ER-301
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 Nicholas Breinich (nickb808) — see LICENSE and NOTICE.
  *
  * A "classic" granular sibling of Planck (which is spectral). Dirac reads short
  * grains directly from the audio source with linear interpolation, multiplies
@@ -89,6 +91,21 @@ public:
     // grains interleave in one cloud. Reuses the binaural head-shadow one-pole
     // (min-combined per ear), so render cost is the already-gated LP path.
     od::Inlet  mColorIn     {"Color"};      // cutoff scatter depth [0,1]; 0 = off
+    // Tilt (v0.2.10): envelope PEAK POSITION, BIPOLAR [−1,1], default 0.
+    // Warps the time axis of WHATEVER window is active (normal morph or a
+    // fixed Window shape): −1 → peak at the grain's start (any shape becomes
+    // its decay version), 0 → symmetric (unpatched/default — bit-identical
+    // to v0.2.9), +1 → swell into a hard stop. Two-rate envelope phase (one
+    // increment to the table midpoint, another after): one compare per
+    // sample, captured per grain at spawn. Bipolar so an unpatched CV means
+    // neutral — the Speed convention.
+    od::Inlet  mTiltIn      {"Tilt"};
+    // TiltSpread (v0.2.10): per-grain RANDOM tilt scatter [0,1]. Each grain
+    // draws its own peak position around Tilt — clouds of mixed envelope
+    // characters (attack grains and swell grains interleaved), the same
+    // scatter philosophy as Psprd (pitch) and Color (spectrum). Spawn-time
+    // only; at 0 no PRNG draw occurs, preserving bit-identity.
+    od::Inlet  mTiltSprdIn  {"TiltSpread"};
     // Diffuse (menu option, 1 = Off · 2 = On): 4 cascaded Schroeder allpasses
     // per channel on the WET path (before the feedback tap, so regeneration is
     // diffused too — the Clouds-style halo). Hard-bypassed when Off.
@@ -97,6 +114,21 @@ public:
     // ring. Distinct from Hold: Hold freezes the CLOUD, Freeze freezes the
     // SOURCE — every control stays live over the locked 2.7 s.
     od::Option mFreezeOpt   {"Freeze", 1};
+    // ── Window (v0.2.10): grain envelope SHAPE, integer 0..7 ──────────────
+    //   0 normal (Texture morph — the default; absent in old presets, so they
+    //     land here and render bit-identically)
+    //   1 bell · 2 sinc · 3 triangle · 4 decay · 5 ramp · 6 tukey · 7 square
+    // A DIAL, not a menu option: od::OptionControl can only ever show THREE
+    // choices (each maps to a physical button inside a fixed-width box), and
+    // a dial is CV-modulatable — since grains capture the shape at spawn,
+    // S&H into this inlet gives per-grain shape scatter. Same call the Scale
+    // control made in v0.1.14.
+    // In every fixed shape, TEXTURE (dial + CV) becomes that shape's own
+    // macro parameter, blending a 5-variant bank — bell width, sinc ring
+    // density (2..9 lobes), tri curvature, decay/ramp time, tukey taper,
+    // square edge. textr 0.5 = the canonical shape. Sinc is SIGNED (polarity
+    // flips mid-grain). All captured per grain — no clicks ever.
+    od::Inlet  mWindowIn    {"Window"};
 
     /* ── Grain-field / head-display accessors ──────────────────────────── */
     // kMaxGrains is public so the host harness (test/host/main.cpp) can size
@@ -149,7 +181,16 @@ public:
     }
     float getVizSpread()          const { return mVizSprd; }
     float getVizDetune()          const { return mVizDetune; }
-    float getVizTexture()         const { return mCurTexture; }   // glyph shape (v0.2.0)
+    // Glyph shape (v0.2.0). With a fixed Window active (v0.2.9) the field
+    // shows a representative form instead of the (inert) Texture knob:
+    // decay/ramp lean, tukey/square flat-top, bell/sinc/triangle arrowhead.
+    float getVizTexture()         const {
+        if (mCurWindow > 0) {
+            static const float kWinTex[7] = {0.5f, 0.5f, 0.5f, 0.0f, 0.15f, 1.0f, 1.0f};
+            return kWinTex[mCurWindow - 1];
+        }
+        return mCurTexture;
+    }
     // ── v0.2.5: every control reaches the field. All read state the DSP
     // already keeps per grain — display-rate only, zero audio-thread cost.
     bool  getGrainReverse(int i)  const { return mGrains[i].reverse; }  // glyph points down
@@ -208,12 +249,16 @@ private:
         float readPosL = 0.0f, readPosR = 0.0f;   // fractional read positions
         float readPos0L = 0.0f, readPos0R = 0.0f; // spawn positions (hold loop)
         float pitchIncrL = 1.0f, pitchIncrR = 1.0f;
-        float envPhase = 0.0f, envIncr = 0.0f;    // envelope table phase
+        float envPhase = 0.0f;                    // envelope table phase
+        float envIncrA = 0.0f, envIncrB = 0.0f;   // phase rate before/after the
+                                                  // table midpoint (Tilt, v0.2.10;
+                                                  // equal at tilt 0.5 = classic)
         float envTex   = 0.5f;                     // Texture captured at spawn (held for life)
         float gainL = 1.0f, gainR = 1.0f;         // equal-power pan (centre = unity)
         float lpStateL = 0.0f, lpStateR = 0.0f;   // binaural head-shadow 1-pole LP state
         float lpAlphaL = 1.0f, lpAlphaR = 1.0f;   // LP coeff per ear (1 = transparent)
         float scale = 1.0f;                       // level/density compensation
+        int8_t envShape = 0;   // 0 = Texture blend (normal); 1..7 = fixed window (v0.2.9)
         bool  live  = false;     // read from capture ring (true) or sample (false)
         // viz
         float panPos = 0.0f;     // [-1,1] grain-field X
@@ -235,6 +280,21 @@ private:
     // only NEW grains — no mid-grain envelope jump (= no clicks) and no rebuild cost.
     std::vector<float> mPercTable;      // kEnvTableSize + 1
     std::vector<float> mHannTable;
+    // Fixed windows (v0.2.9), built once beside the texture tables. Six new
+    // tables (~4 KB each); tukey reuses mTukeyTable. Indexed by envShape-1
+    // via mShapeTables (set up in buildEnvTables).
+    // ── Fixed-window BANKS (v0.2.10): in each Window mode, Texture becomes
+    // that shape's own macro parameter — 5 variants per shape built ONCE at
+    // init (variant 2 = the canonical shape, so textr at 0.5 = v0.2.9's
+    // table), and the render blends adjacent variants with the SAME two-table
+    // lerp the normal Texture path uses. No rebuilds, ever (v0.1.13 law).
+    //   bell: width | sinc: ring density (2..9 lobes — supersedes the brief
+    //   sinc2/sinc8 entries) | tri: curvature | decay: fall time |
+    //   ramp: rise time | tukey: taper | square: edge hardness
+    static constexpr int kWinShapes   = 7;
+    static constexpr int kWinVariants = 5;
+    std::vector<float> mWinBank[kWinShapes][kWinVariants];
+    int mCurWindow = 0;   // 0 = normal; 1..7 = fixed shape (read per block)
     std::vector<float> mTukeyTable;
     float mCurTexture = 0.5f;           // Texture at the current block (captured per spawn)
     void  buildEnvTables();
@@ -299,7 +359,7 @@ private:
                      int sampleOffset, bool liveMode, float compress, float binaural,
                      int scaleSel, int heads, float headSpread, float headTune,
                      float snap,
-                     float feedback, float color);
+                     float feedback, float color, float tilt, float tiltSprd);
     int   findSlot(int grainsCap);
 
 #endif // SWIGLUA

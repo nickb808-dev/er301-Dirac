@@ -5,7 +5,7 @@ the audio, windowed, pitched by playback speed, and layered.
 It runs on a live input by default and switches to granulating a loaded
 sample as soon as you select one from the menu.
 
-Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.8**
+Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.10**
 
 ---
 
@@ -76,7 +76,10 @@ can run at once.
 | sprd | Spread | 0–1 / 0.5 | Stereo position scatter across grains (also the binaural width). |
 | posJtr | PosJtr | 0–1 / 0 | Random spray of each grain's read position (±100 ms). |
 | rev | RevProb | 0–1 / 0 | Probability a grain plays in reverse. |
-| textr | Texture | 0–1 / 0.5 | Grain envelope shape: **Percussive (0) → Hann (0.5) → Tukey (1)**. |
+| shape | Window | 0–7 / 0 | **Grain envelope shape.** 0 = normal (the Texture morph). 1 bell · 2 sinc (signed ringing lobes — grains flip polarity mid-grain) · 3 tri · 4 decay · 5 ramp · 6 tukey · 7 square. A CV-able dial rather than a menu option (a menu row can only show three choices) — and since grains capture the shape at spawn, **S&H into `shape` scatters the shape per grain**. |
+| textr | Texture | 0–1 / 0.5 | **Shape morph / shape macro.** At `shape 0`: Percussive → Hann → Tukey. In shapes 1–7 it becomes *that shape's* parameter — bell width, sinc ring density (2→9 lobes), tri curvature, decay fall time, ramp rise time, tukey taper, square edge hardness; 0.5 = the canonical shape. CV here is per-grain shape choreography (an LFO cycles decay times through the cloud). |
+| tilt | Tilt | −1…+1 / 0 | **Envelope peak position** — tilts the time axis of whatever window is active (Texture morph or a fixed Window shape): −1 = peak at the start (any shape becomes its decay version), 0 = symmetric (classic), +1 = swell into a hard stop. Unpatched CV = neutral. |
+| tsprd | TiltSpread | 0–1 / 0 | **Tilt scatter** — each grain draws its own peak position around `tilt`. Attack grains and swell grains interleave in one cloud; a static cloud starts breathing. |
 | snap | Snap | 0–1 / 0 | This pulls each grain's read position onto the nearest transient instead of wherever the metronome landed. 0 = free (classic), 1 = locked. Turns a smear of a drum loop back into hits. |
 | color | Color | 0–1 / 0 | Each grain draws a random low-pass cutoff, darker with Color (20 kHz down to ~600 Hz at 1). The spectral version of psprd. |
 | comp | Compress | 0–1 / 0 | Per-grain leveling that boosts quiet source bits and tames loud ones (±12 dB) so sparse clouds stay even. |
@@ -252,6 +255,30 @@ g++ -std=c++11 -O2 -ffast-math -Itest/host -Isrc src/Dirac.cpp test/host/main.cp
 
 ## Changelog (recent)
 
+- **0.2.10** — **Tilt**: a bipolar dial for the envelope's *peak position*,
+  warping the time axis of whatever window is active — every shape gains a
+  continuous decay↔swell axis (tilted bell = the classic grainlet family;
+  tilted tukey = plucked pads). One compare per sample, captured per grain, and
+  0 (the default, and any unpatched CV) is bit-identical to 0.2.9.
+  **TiltSpread** scatters each grain's peak position around the Tilt setting —
+  mixed envelope characters in one cloud, the Psprd/Color scatter philosophy
+  applied to shape. **Window** moved from the config menu to a CV-able
+  **`shape` dial** (0 = normal, 1–7 the fixed shapes) — a menu row can only
+  ever display three choices, and a dial means an S&H can scatter the shape
+  per grain. And **Texture is now conditional on the shape**: in each fixed
+  shape the `textr` dial + CV become that shape's own macro parameter — bell
+  width, sinc ring density (a continuous 2→9 lobes), tri curvature,
+  decay/ramp time, tukey taper, square edge — via 5-variant table banks built
+  once at init and blended with the same two-table lerp the normal path uses.
+  No dead dial in any mode.
+- **0.2.9** — **Window** (menu): grain envelope shapes in the Multigrain
+  tradition — bell, sinc, tri, decay, ramp, tukey, square — as fixed overrides
+  of the Texture morph. `sinc` is the character shape: its lobes are signed, so
+  grains flip polarity mid-grain (ringing, AM-like texture). Shapes are
+  captured per grain at spawn, so flipping the menu mid-cloud never clicks;
+  hard-edged shapes carry a 1% anti-click taper. **normal** (the default) is
+  bit-identical to 0.2.8, and old presets — which have no Window setting —
+  land there automatically.
 - **0.2.8** — **Fix: feedback no longer fades out into an "overload"** (worst
   with multiple playheads). The regeneration loop was slowly filling with
   low-frequency energy the saturator kept re-creating; the pedestal railed the

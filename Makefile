@@ -37,7 +37,7 @@ TOOLCHAIN ?= docker
 
 PKG     := dirac
 MODULE  := libdirac
-VERSION := 0.2.8
+VERSION := 0.2.10
 ARCH    := am335x
 
 SRCDIR  := src
@@ -257,6 +257,7 @@ $(PKGFILE): $(OUTLIB) assets/toc.lua assets/Dirac.lua assets/WaveHeadView.lua as
 	@echo ">>> PKG $(PKGFILE)"
 	cd assets && zip -j ../$(PKGFILE) toc.lua Dirac.lua WaveHeadView.lua GrainFieldView.lua
 	cd $(OUTDIR) && zip -j ../../$(PKGFILE) libdirac.so
+	zip -j $(PKGFILE) LICENSE NOTICE
 	@echo ">>> Done: $(PKGFILE)"
 
 $(PKGDIR):

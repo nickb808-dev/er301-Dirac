@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: Apache-2.0
+-- Copyright 2026 Nicholas Breinich (nickb808) — see LICENSE and NOTICE.
 -- Dirac.lua — ER-301 unit wrapper for Dirac.
 --
 -- Sample-based sibling of MorphGrain: attach a sample from the pool/card, and
@@ -89,6 +91,9 @@ function Dirac:onLoadGraph(channelCount)
   param(self, head, "headtune",   "HeadTune",   0.0)   -- pitch interval between heads (st)
   param(self, head, "snap",      "Snap",      0.0)     -- pull grain starts onto transients
   param(self, head, "color",     "Color",     0.0)     -- per-grain cutoff scatter (v0.2.2)
+  param(self, head, "window",    "Window",    0.0)     -- grain shape 0..7 (v0.2.10)
+  param(self, head, "tilt",      "Tilt",      0.0)     -- envelope peak position, bipolar (v0.2.10)
+  param(self, head, "tiltspread","TiltSpread",0.0)     -- per-grain tilt scatter (v0.2.10)
   param(self, head, "mix",       "Mix",       1.0)     -- wet/dry (live mode only); 1 = all wet
   param(self, head, "feedback",  "Feedback",  0.0)     -- regen: ring reinjection (both modes, v0.2.2)
   param(self, head, "compress",  "Compress",  0.0)     -- per-grain leveling toward a target
@@ -377,7 +382,7 @@ end
 local controlOrder = {
   "trig", "hold", "semishift", "voct", "playhead", "speed", "grainlen", "grains", "rate",
   "posjtr", "spread", "detune",
-  "psprd", "scale", "texture", "color", "snap", "compress", "revprob", "level", "mix", "feedback", "binaural",
+  "psprd", "scale", "window", "texture", "tilt", "tiltspread", "color", "snap", "compress", "revprob", "level", "mix", "feedback", "binaural",
 }
 
 -- "wave" LEADS the expanded strip so the waveform is the default main display
@@ -452,7 +457,20 @@ function Dirac:onLoadViews(objects, branches)
   gb("binaural", "bin",   "Binaural", Encoder.getMap("[0,1]"), 0.0)
   gb("revprob",  "rev",   "Reverse probability", Encoder.getMap("[0,1]"), 0.0)
   gb("psprd",    "psprd", "Pitch scatter (st)", app.LinearDialMap(0, 12), 0.0, app.LinearDialMap(-12, 12))
-  gb("texture",  "textr", "Perc>Hann>Tukey", Encoder.getMap("[0,1]"), 0.5)
+  -- Window (v0.2.10): grain shape select. Integer-stepping + CV-able, so an
+  -- S&H here scatters shape per grain. 0 normal · 1 bell · 2 sinc · 3 tri ·
+  -- 4 decay · 5 ramp · 6 tukey · 7 square. (A menu OptionControl can only
+  -- ever display THREE choices — hence a dial.)
+  local windowMap = app.LinearDialMap(0, 7);  windowMap:setCoarseRadix(7)
+  gb("window",   "shape", "0 nrm 1bel 2snc 3tri 4dcy 5rmp 6tky 7sqr", windowMap, 0.0,
+     windowMap)
+  -- Texture: in shape 0 the perc>hann>tukey morph; in shapes 1-7 that shape's
+  -- own macro (width / ring density / curvature / time / taper / edge).
+  gb("texture",  "textr", "Shape morph / shape macro", Encoder.getMap("[0,1]"), 0.5)
+  -- Tilt (v0.2.10): envelope peak position, works on every Window shape.
+  gb("tilt",     "tilt",  "Peak: attack<>swell", app.LinearDialMap(-1, 1), 0.0,
+     app.LinearDialMap(-1, 1))
+  gb("tiltspread","tsprd","Tilt scatter per grain", Encoder.getMap("[0,1]"), 0.0)
   gb("snap",     "snap",  "Lock grains to onsets", Encoder.getMap("[0,1]"), 0.0)
   gb("color",    "color", "Cutoff scatter: bright-dark", Encoder.getMap("[0,1]"), 0.0)
   -- Integer-stepping dials: Grains (1..16) and Semitone (−24..24) move in whole units.

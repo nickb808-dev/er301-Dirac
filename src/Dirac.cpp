@@ -1,4 +1,6 @@
 /* Dirac.cpp — Classic (time-domain) Granular Synthesizer for the ER-301
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 Nicholas Breinich (nickb808) — see LICENSE and NOTICE.
  *
  * Grains are read directly from the source (sample at the Playhead, or the live
  * capture ring) with linear interpolation, windowed by a morphable envelope,
@@ -105,6 +107,9 @@ Dirac::Dirac()
     addInput(mHeadTuneIn);
     addInput(mSnapIn);         // v0.2.0 — onset-locked spawning
     addInput(mColorIn);        // v0.2.2 — per-grain cutoff scatter
+    addInput(mTiltIn);         // v0.2.10 — envelope peak position (appended)
+    addInput(mTiltSprdIn);     // v0.2.10 — per-grain tilt scatter
+    addInput(mWindowIn);       // v0.2.10 — grain shape select (appended last)
     addOption(mDiffuseOpt);    // v0.2.2 — wet-path allpass diffuser (menu)
     addOption(mFreezeOpt);     // v0.2.2 — capture-ring write freeze (menu)
 
@@ -117,6 +122,9 @@ Dirac::Dirac()
     mPercTable.assign(kEnvTableSize + 1, 0.0f);
     mHannTable.assign(kEnvTableSize + 1, 0.0f);
     mTukeyTable.assign(kEnvTableSize + 1, 0.0f);
+    for (int sh = 0; sh < kWinShapes; ++sh)         // v0.2.10 window banks
+        for (int v = 0; v < kWinVariants; ++v)
+            mWinBank[sh][v].assign(kEnvTableSize + 1, 0.0f);
     buildEnvTables();
 }
 
@@ -179,6 +187,66 @@ void Dirac::buildEnvTables()
     // Guarantee click-free onset & tail on every shape.
     mPercTable[0] = mHannTable[0] = mTukeyTable[0] = 0.0f;
     mPercTable[kEnvTableSize] = mHannTable[kEnvTableSize] = mTukeyTable[kEnvTableSize] = 0.0f;
+
+    // ── Window BANKS (v0.2.10): 5 variants per fixed shape, built ONCE.
+    // Variant 2 is the canonical v0.2.9 shape (textr 0.5 = same table); the
+    // Texture dial/CV blends adjacent variants at render — in each Window
+    // mode Texture is that shape's own macro parameter:
+    //   bell width | sinc ring density (2..9 lobes) | tri curvature |
+    //   decay fall time | ramp rise time | tukey taper | square edge.
+    // Init-only trig/exp cost; NO rebuilds at runtime (v0.1.13 law).
+    {
+        const float kSigma [kWinVariants] = {0.06f, 0.09f, 0.13f, 0.18f, 0.25f};  // bell
+        const float kLobes [kWinVariants] = {2.0f, 3.0f, 4.0f, 6.0f, 9.0f};       // sinc
+        const float kTriPow[kWinVariants] = {2.5f, 1.6f, 1.0f, 0.7f, 0.45f};      // tri
+        const float kFallK [kWinVariants] = {12.0f, 8.5f, 6.0f, 4.0f, 2.5f};      // decay/ramp
+        const float kTaper [kWinVariants] = {0.02f, 0.06f, 0.125f, 0.25f, 0.5f};  // tukey
+        const float kSqEdge[kWinVariants] = {0.003f, 0.006f, 0.01f, 0.03f, 0.08f};// square
+        const float kEdge   = 0.01f;    // decay/ramp attack-edge taper
+        const float invEdge = 1.0f / kEdge;
+        for (int v = 0; v < kWinVariants; ++v) {
+            float *bell = mWinBank[0][v].data(), *sinc = mWinBank[1][v].data(),
+                  *tri  = mWinBank[2][v].data(), *dec  = mWinBank[3][v].data(),
+                  *ramp = mWinBank[4][v].data(), *tuk  = mWinBank[5][v].data(),
+                  *sq   = mWinBank[6][v].data();
+            const float sqE = kSqEdge[v], invSqE = 1.0f / sqE;
+            const float tap = kTaper[v];
+            for (int i = 0; i <= kEnvTableSize; ++i) {
+                const float t = float(i) / float(kEnvTableSize);
+                {   // BELL — Gaussian, width by variant
+                    const float z = (t - 0.5f) / kSigma[v];
+                    bell[i] = expf(-0.5f * z * z);
+                }
+                {   // SINC — SIGNED ringing, lobe count by variant
+                    const float x = (t - 0.5f) * 2.0f * kLobes[v];
+                    sinc[i] = (fabsf(x) < 1e-6f) ? 1.0f : sinf(kPi * x) / (kPi * x);
+                }
+                {   // TRI — curvature by variant (spike .. linear .. bulge)
+                    tri[i] = powf(1.0f - fabsf(2.0f * t - 1.0f), kTriPow[v]);
+                }
+                {   // DECAY / RAMP — fall/rise time by variant, tapered edges
+                    const float eIn  = (t < kEdge)        ? 0.5f * (1.0f - cosf(kPi * t * invEdge))          : 1.0f;
+                    const float eOut = (t > 1.0f - kEdge) ? 0.5f * (1.0f - cosf(kPi * (1.0f - t) * invEdge)) : 1.0f;
+                    dec[i]  = eIn  * expf(-kFallK[v] * t);
+                    ramp[i] = eOut * expf(-kFallK[v] * (1.0f - t));
+                }
+                {   // TUKEY — taper fraction by variant (near-square .. hann)
+                    if      (t < tap)        tuk[i] = 0.5f * (1.0f - cosf(kPi * t / tap));
+                    else if (t > 1.0f - tap) tuk[i] = 0.5f * (1.0f - cosf(kPi * (1.0f - t) / tap));
+                    else                     tuk[i] = 1.0f;
+                }
+                {   // SQUARE — edge hardness by variant
+                    const float eIn  = (t < sqE)        ? 0.5f * (1.0f - cosf(kPi * t * invSqE))          : 1.0f;
+                    const float eOut = (t > 1.0f - sqE) ? 0.5f * (1.0f - cosf(kPi * (1.0f - t) * invSqE)) : 1.0f;
+                    sq[i] = eIn * eOut;
+                }
+            }
+            for (int sh = 0; sh < kWinShapes; ++sh) {   // click-free guarantees
+                mWinBank[sh][v][0] = 0.0f;
+                mWinBank[sh][v][kEnvTableSize] = 0.0f;
+            }
+        }
+    }
 }
 
 /* ── source read (linear interpolation) ───────────────────────────────────── */
@@ -246,7 +314,7 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
                        int sampleOffset, bool liveMode, float compress, float binaural,
                        int scaleSel, int heads, float headSpread, float headTune,
                        float snap,
-                       float feedback, float color)
+                       float feedback, float color, float tilt, float tiltSprd)
 {
     const int slot = findSlot(grainsCap);
     if (slot < 0) return;
@@ -280,7 +348,24 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
     const float overlap  = (hopSamples > 0.0f) ? float(grainDuration) / hopSamples : 1.0f;
     const float densComp = (overlap > 1.0f) ? (1.0f / sqrtf(overlap)) : 1.0f;
     float       scale    = level * densComp;
-    const float envIncr  = float(kEnvTableSize) / float(grainDuration);
+    // Tilt (v0.2.10): the envelope phase reaches the TABLE MIDPOINT after
+    // tilt·duration samples and the end after the remainder — two rates, one
+    // compare at render. tilt 0.5 → both rates equal the classic
+    // kEnvTableSize/duration EXACTLY (power-of-two scaling is lossless), so
+    // the default is bit-identical to v0.2.9.
+    // TiltSpread: each grain draws its own peak position around Tilt. Gated
+    // so tsprd 0 makes no PRNG draw (bit-identity, and Psprd et al. keep
+    // their random sequence).
+    float tiltEff = tilt;
+    if (tiltSprd > 0.0001f) {
+        tiltEff += tiltSprd * randBipolar();
+        if (tiltEff < -1.0f) tiltEff = -1.0f; else if (tiltEff > 1.0f) tiltEff = 1.0f;
+    }
+    float tiltPos = 0.5f + 0.5f * tiltEff;          // −1..1 → peak position 0..1
+    const float tiltCl   = (tiltPos < 0.02f) ? 0.02f : (tiltPos > 0.98f ? 0.98f : tiltPos);
+    const float kHalfTab = float(kEnvTableSize / 2);
+    const float envIncrA = kHalfTab / (tiltCl * float(grainDuration));
+    const float envIncrB = kHalfTab / ((1.0f - tiltCl) * float(grainDuration));
     const bool  detuned  = (detune > 0.0001f);
     const float detuneRatio = detuned ? expf(kLog2Over12 * detune) : 1.0f;
 
@@ -432,8 +517,10 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
     g.duration   = grainDuration;
     g.age        = 0;
     g.envPhase   = 0.0f;
-    g.envIncr    = envIncr;
+    g.envIncrA   = envIncrA;
+    g.envIncrB   = envIncrB;
     g.envTex     = mCurTexture;   // capture Texture for this grain's life (no mid-grain jump)
+    g.envShape   = int8_t(mCurWindow);   // v0.2.9: fixed window (0 = Texture morph)
     g.reverse    = reverseProb;   // per-spawn reverse decision (computed at call site)
     g.live       = srcLive;   // v0.2.2: regen grains read the ring in sample mode
     g.pitchIncrL = incL;
@@ -546,6 +633,9 @@ void Dirac::process()
     const float headTune   = std::max(-12.0f, std::min(mHeadTuneIn.buffer()[0], 12.0f));
     const float snap       = std::max(0.0f, std::min(mSnapIn.buffer()[0],  1.0f));
     const float color      = std::max(0.0f, std::min(mColorIn.buffer()[0], 1.0f));
+    // Tilt is BIPOLAR: −1 attack … 0 symmetric (default/unpatched) … +1 swell.
+    const float tilt       = std::max(-1.0f, std::min(mTiltIn.buffer()[0], 1.0f));
+    const float tiltSprd   = std::max(0.0f, std::min(mTiltSprdIn.buffer()[0], 1.0f));
     const float grainLenSec = std::max(0.001f, std::min(mGrainLenIn.buffer()[0],
                                        float(kMaxGrainSamp) / float(kSampleRate)));
     const int   grainDuration = std::max(64, std::min(int(grainLenSec * float(kSampleRate)),
@@ -598,6 +688,12 @@ void Dirac::process()
     // and blends its own shape at render, so moving Texture never rebuilds anything
     // and never disturbs a playing grain (no clicks).
     mCurTexture = texture;
+    // Window shape (v0.2.10): read once per block; spawns capture it, so CV
+    // here selects a shape PER GRAIN (S&H = shape scatter).
+    {
+        const int w = int(mWindowIn.buffer()[0] + 0.5f);
+        mCurWindow = (w < 0) ? 0 : (w > kWinShapes ? kWinShapes : w);
+    }
 
     // ── Playhead scan (v0.1.18): Speed decouples TIME from PITCH (sample mode).
     // Grain pitch is per-grain read speed (SemiShift/V-Oct/Psprd, unchanged); Speed
@@ -640,7 +736,7 @@ void Dirac::process()
             spawnGrain(playheadEff, sampleCount, posJtr, sprd, detune, level,
                        (revprob > 0.0f) && (randUnipolar() < revprob), psprd, grains,
                        holdOn, semiShift, grainDuration, hopSamples, spawnAt, liveMode, compress, binaural, scale,
-                       heads, headSpread, headTune, snap, feedback, color);
+                       heads, headSpread, headTune, snap, feedback, color, tilt, tiltSprd);
             mSpawnTimer += hopSamples;
         }
     } else {
@@ -653,7 +749,7 @@ void Dirac::process()
                 spawnGrain(playheadEff, sampleCount, posJtr, sprd, detune, level,
                            (revprob > 0.0f) && (randUnipolar() < revprob), psprd, grains,
                            holdOn, semiShift, grainDuration, hopSamples, s, liveMode, compress, binaural, scale,
-                           heads, headSpread, headTune, snap, feedback, color);
+                           heads, headSpread, headTune, snap, feedback, color, tilt, tiltSprd);
             }
             last = fireBuf[s];
         }
@@ -681,7 +777,8 @@ void Dirac::process()
         const float incL = g.reverse ? -g.pitchIncrL : g.pitchIncrL;
         const float incR = g.reverse ? -g.pitchIncrR : g.pitchIncrR;
         float readL = g.readPosL, readR = g.readPosR, envPh = g.envPhase;
-        const float envInc = g.envIncr;   // hoisted: g.* float loads can alias out-buffer stores
+        const float envIncA = g.envIncrA, envIncB = g.envIncrB;   // hoisted (Tilt two-rate)
+        const float kHalfT  = float(kEnvTableSize / 2);
         const float lpAL = g.lpAlphaL, lpAR = g.lpAlphaR;   // head-shadow LP (1 = transparent)
         float lpL = g.lpStateL, lpR = g.lpStateR;
         // Binaural head-shadow or Color engaged?
@@ -691,8 +788,16 @@ void Dirac::process()
         // At an exact node (Texture 0 or the 0.5 default) ew == 0 → skip the second
         // table lerp entirely (bit-identical: ea + 0·(eb−ea) == ea).
         const float *eA, *eB; float ew;
-        if (g.envTex < 0.5f) { eA = mPercTable.data(); eB = mHannTable.data();  ew = g.envTex * 2.0f; }
-        else                 { eA = mHannTable.data(); eB = mTukeyTable.data(); ew = (g.envTex - 0.5f) * 2.0f; }
+        if (g.envShape > 0) {   // fixed Window: Texture blends the shape's BANK
+            float pos = g.envTex * float(kWinVariants - 1);   // 0..4
+            int   k   = int(pos);
+            if (k > kWinVariants - 2) k = kWinVariants - 2;
+            eA = mWinBank[g.envShape - 1][k].data();
+            eB = mWinBank[g.envShape - 1][k + 1].data();
+            ew = pos - float(k);   // textr 0.5 → pos 2.0, ew 0 → single-lerp path
+        }
+        else if (g.envTex < 0.5f) { eA = mPercTable.data(); eB = mHannTable.data();  ew = g.envTex * 2.0f; }
+        else                      { eA = mHannTable.data(); eB = mTukeyTable.data(); ew = (g.envTex - 0.5f) * 2.0f; }
         const bool blend = (ew != 0.0f);
 
         // Edge fade (anti-click): fade the grain as its read nears a SEAM — the
@@ -783,7 +888,8 @@ void Dirac::process()
                 outL[outStart + s] += gL * eL * sL;
                 outR[outStart + s] += gR * eR * sR;
             }
-            readL += incL; readR += incR; envPh += envInc;
+            readL += incL; readR += incR;
+            envPh += (envPh < kHalfT) ? envIncA : envIncB;   // Tilt: peak-relative rates
             if (!live) {
                 if      (readL >= wN) readL -= wN; else if (readL < 0.0f) readL += wN;
                 if      (readR >= wN) readR -= wN; else if (readR < 0.0f) readR += wN;

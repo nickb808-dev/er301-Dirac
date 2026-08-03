@@ -30,7 +30,7 @@ static void setInputs(Dirac &d, const Ctl *ctls, int n)
                          &d.mVoctIn,
                          &d.mHeadsIn, &d.mHeadSpreadIn, &d.mHeadTuneIn,
                          &d.mSnapIn,
-                         &d.mColorIn,
+                         &d.mColorIn, &d.mTiltIn, &d.mTiltSprdIn, &d.mWindowIn,
 #ifdef HAS_SPEED
                          &d.mSpeedIn,
 #endif
@@ -159,7 +159,7 @@ int main(int argc, char **argv)
             d.setSample(&smp);
             d.mDiffuseOpt.set(2);
             const Ctl c[] = {{"Playhead",0.9f},{"Rate",16.0f},{"Level",0.9f},{"Grains",16.0f},
-                             {"GrainLen",2.0f},{"Feedback",0.95f},{"Color",1.0f},
+                             {"GrainLen",2.0f},{"Feedback",0.95f},{"Color",1.0f},{"Window",2.0f},{"Tilt",-0.9f},{"TiltSpread",1.0f},
                              {"SemiShift",24.0f},{"Detune",2.0f},{"Binaural",1.0f},{"Spread",1.0f},
                              {"Hold",1.0f},{"Snap",1.0f},{"PosJtr",1.0f}};
             setInputs(d, c, sizeof(c)/sizeof(c[0]));
@@ -588,6 +588,217 @@ int main(int argc, char **argv)
         const bool pass = hfFrac > 0.35 && dcAvg < 0.06 && sqrt(rms / n) > 0.1 && nf == 0;
         printf("fbdc: %s\n", pass ? "PASS" : "FAIL");
         return pass ? 0 : 1;
+    }
+
+    // ── windowt: fixed grain windows (v0.2.9) ───────────────────────────────
+    // CONSTANT (DC 0.5) sample + one triggered grain at Spread 0, Level 1:
+    // the output IS the window (x 0.5). Verify each shape's signature, plus
+    // "normal" staying on the Texture path.
+    if (!strcmp(argv[1], "windowt")) {
+        const int N = 48000;
+        std::vector<float> st(N, 0.5f);
+        od::Sample smp; smp.mSampleCount = N; smp.mChannelCount = 1; smp.mpData = st.data();
+        int fails = 0, nf = 0;
+        const char *names[8] = {"","bell","sinc","tri","decay","ramp","tukey","square"};
+        for (int w = 1; w <= 7; ++w) {
+            Dirac d; rng = 0x111; d.setSample(&smp);
+            Ctl c[] = {{"Playhead",0.3f},{"Rate",0.0f},{"GrainLen",0.2f},{"Grains",1.0f},
+                       {"Level",1.0f},{"Spread",0.0f},{"Texture",0.5f},{"PosJtr",0.0f},
+                       {"Window",float(w)}};
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            Ctl f1[] = {{"Fire",1.0f}}; setInputs(d, f1, 1);
+            d.process();
+            Ctl f0[] = {{"Fire",0.0f}}; setInputs(d, f0, 1);
+            std::vector<float> env;
+            for (int b = 0; b < 80; ++b) {           // 0.2 s grain = 75 blocks
+                d.process();
+                const float *L = d.mOutL.buffer();
+                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx) {
+                    if (!std::isfinite(L[sIdx])) nf++;
+                    env.push_back(L[sIdx] * 2.0f);   // undo the 0.5 source
+                }
+            }
+            // trim to the active span (first/last |e| > 1e-4)
+            int a = 0, b2 = int(env.size()) - 1;
+            while (a < b2 && fabsf(env[a])  < 1e-4f) a++;
+            while (b2 > a && fabsf(env[b2]) < 1e-4f) b2--;
+            const int n = b2 - a + 1;
+            if (n < 1000) { printf("  [FAIL] %s: no grain rendered\n", names[w]); fails++; continue; }
+            auto at = [&](float frac){ return env[a + int(frac * (n - 1))]; };
+            float mn = 1e9f, mx = -1e9f; int mxi = 0;
+            for (int i = 0; i < n; ++i) {
+                if (env[a+i] > mx) { mx = env[a+i]; mxi = i; }
+                if (env[a+i] < mn) mn = env[a+i];
+            }
+            const float peakPos = float(mxi) / float(n - 1);
+            bool ok = true; char why[64] = "";
+            switch (w) {
+              case 1:  ok = fabsf(peakPos-0.5f) < 0.06f && mn > -0.01f
+                          && fabsf(at(0.5f) - 1.0f) < 0.05f;                  strcpy(why,"peak centre, unsigned"); break;
+              case 2:  ok = mn < -0.15f && fabsf(peakPos-0.5f) < 0.06f;        strcpy(why,"signed lobes, peak centre"); break;
+              case 3:  ok = fabsf(peakPos-0.5f) < 0.06f
+                          && fabsf(at(0.25f) - 0.5f) < 0.06f;                  strcpy(why,"linear to centre"); break;
+              case 4:  ok = peakPos < 0.06f && at(0.5f) < 0.10f && mn > -0.01f; strcpy(why,"instant attack, expo fall"); break;
+              case 5:  ok = peakPos > 0.94f && at(0.5f) < 0.10f && mn > -0.01f; strcpy(why,"expo rise, hard stop"); break;
+              case 6:  ok = fabsf(at(0.5f)-1.0f) < 0.02f
+                          && fabsf(at(0.25f)-1.0f) < 0.02f && at(0.02f) < 0.9f; strcpy(why,"plateau, 12.5% tapers"); break;
+              case 7:  ok = fabsf(at(0.5f)-1.0f) < 0.02f
+                          && fabsf(at(0.03f)-1.0f) < 0.02f
+                          && fabsf(at(0.97f)-1.0f) < 0.02f;                    strcpy(why,"flat to the edges"); break;
+            }
+            printf("  [%s] %-6s peak@%.2f min %+.2f  (%s)\n",
+                   ok ? "PASS" : "FAIL", names[w], peakPos, mn, why);
+            if (!ok) fails++;
+        }
+        printf("windowt: %s (nonFinite=%d)\n", (fails == 0 && nf == 0) ? "PASS" : "FAIL", nf);
+        return (fails == 0 && nf == 0) ? 0 : 1;
+    }
+
+    // ── tiltt: envelope peak position (v0.2.10) ─────────────────────────────
+    // DC sample + bell window: measured peak position must track the Tilt
+    // input (bipolar: −0.8 → 0.1, 0 → 0.5, +0.8 → 0.9).
+    if (!strcmp(argv[1], "tiltt")) {
+        const int N = 48000;
+        std::vector<float> st(N, 0.5f);
+        od::Sample smp; smp.mSampleCount = N; smp.mChannelCount = 1; smp.mpData = st.data();
+        int fails = 0, nf = 0;
+        const float tin[3]  = {-0.8f, 0.0f, 0.8f};
+        const float want[3] = { 0.10f, 0.50f, 0.90f};
+        for (int k = 0; k < 3; ++k) {
+            Dirac d; rng = 0x717; d.setSample(&smp);   // bell via the Window inlet
+            Ctl c[] = {{"Playhead",0.3f},{"Rate",0.0f},{"GrainLen",0.2f},{"Grains",1.0f},
+                       {"Level",1.0f},{"Spread",0.0f},{"Texture",0.5f},{"PosJtr",0.0f},
+                       {"Tilt",tin[k]},{"Window",1.0f}};
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            Ctl f1[] = {{"Fire",1.0f}}; setInputs(d, f1, 1);
+            d.process();
+            Ctl f0[] = {{"Fire",0.0f}}; setInputs(d, f0, 1);
+            std::vector<float> env;
+            for (int b = 0; b < 80; ++b) {
+                d.process();
+                const float *L = d.mOutL.buffer();
+                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx) {
+                    if (!std::isfinite(L[sIdx])) nf++;
+                    env.push_back(L[sIdx]);
+                }
+            }
+            int a = 0, b2 = int(env.size()) - 1;
+            while (a < b2 && fabsf(env[a])  < 1e-4f) a++;
+            while (b2 > a && fabsf(env[b2]) < 1e-4f) b2--;
+            const int n = b2 - a + 1;
+            int mxi = 0; float mx = -1e9f;
+            for (int i = 0; i < n; ++i) if (env[a+i] > mx) { mx = env[a+i]; mxi = i; }
+            const float peakPos = float(mxi) / float(n - 1);
+            const bool ok = (n > 1000) && fabsf(peakPos - want[k]) < 0.05f;
+            printf("  [%s] tilt %+.1f -> peak@%.2f (want %.2f)\n",
+                   ok ? "PASS" : "FAIL", tin[k], peakPos, want[k]);
+            if (!ok) fails++;
+        }
+        // TiltSpread: 12 sequential single grains at tilt 0 — tsprd 0 must
+        // put every peak at ~0.5; tsprd 1 must SCATTER them (stddev check).
+        for (int pass = 0; pass < 2; ++pass) {
+            Dirac d; rng = 0x5ca7; d.setSample(&smp);
+            Ctl c[] = {{"Playhead",0.3f},{"Rate",0.0f},{"GrainLen",0.05f},{"Grains",1.0f},
+                       {"Level",1.0f},{"Spread",0.0f},{"Texture",0.5f},{"PosJtr",0.0f},
+                       {"Tilt",0.0f},{"TiltSpread",pass?1.0f:0.0f},{"Window",1.0f}};
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            float peaks[12]; int np = 0;
+            for (int g = 0; g < 12; ++g) {
+                Ctl f1[] = {{"Fire",1.0f}}; setInputs(d, f1, 1);
+                d.process();
+                Ctl f0[] = {{"Fire",0.0f}}; setInputs(d, f0, 1);
+                std::vector<float> env;
+                for (int b = 0; b < 22; ++b) {          // 0.05 s grain + margin
+                    d.process();
+                    const float *L = d.mOutL.buffer();
+                    for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx) {
+                        if (!std::isfinite(L[sIdx])) nf++;
+                        env.push_back(L[sIdx]);
+                    }
+                }
+                int a = 0, b2 = int(env.size()) - 1;
+                while (a < b2 && fabsf(env[a])  < 1e-4f) a++;
+                while (b2 > a && fabsf(env[b2]) < 1e-4f) b2--;
+                const int n = b2 - a + 1;
+                if (n < 500) continue;
+                int mxi = 0; float mx = -1e9f;
+                for (int i = 0; i < n; ++i) if (env[a+i] > mx) { mx = env[a+i]; mxi = i; }
+                peaks[np++] = float(mxi) / float(n - 1);
+            }
+            float mean = 0, sd = 0;
+            for (int i = 0; i < np; ++i) mean += peaks[i];
+            mean /= np;
+            for (int i = 0; i < np; ++i) sd += (peaks[i]-mean)*(peaks[i]-mean);
+            sd = sqrtf(sd / np);
+            const bool ok = pass ? (sd > 0.15f) : (sd < 0.02f && fabsf(mean-0.5f) < 0.03f);
+            printf("  [%s] tsprd=%d  %d grains  peak mean %.2f sd %.3f\n",
+                   ok ? "PASS" : "FAIL", pass, np, mean, sd);
+            if (!ok) fails++;
+        }
+        printf("tiltt: %s (nonFinite=%d)\n", (fails == 0 && nf == 0) ? "PASS" : "FAIL", nf);
+        return (fails == 0 && nf == 0) ? 0 : 1;
+    }
+
+    // ── winbankt: Texture as each shape's macro (v0.2.10 banks) ─────────────
+    // DC sample, single grain, Texture 0 vs 1 in three shape modes:
+    //   sinc  — ring density: zero-crossings rise sharply
+    //   decay — fall time: value at 30% of the grain slow vs fast
+    //   tukey — taper: value at 5% square-ish vs hann-ish
+    if (!strcmp(argv[1], "winbankt")) {
+        const int N = 48000;
+        std::vector<float> st(N, 0.5f);
+        od::Sample smp; smp.mSampleCount = N; smp.mChannelCount = 1; smp.mpData = st.data();
+        int fails = 0, nf = 0;
+        struct Probe { int w; float tex; };
+        auto render = [&](int w, float tex, std::vector<float> &env) {
+            Dirac d; rng = 0xba7c; d.setSample(&smp);
+            Ctl c[] = {{"Playhead",0.3f},{"Rate",0.0f},{"GrainLen",0.2f},{"Grains",1.0f},
+                       {"Level",1.0f},{"Spread",0.0f},{"Texture",tex},{"PosJtr",0.0f},
+                       {"Window",float(w)}};
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            Ctl f1[] = {{"Fire",1.0f}}; setInputs(d, f1, 1);
+            d.process();
+            Ctl f0[] = {{"Fire",0.0f}}; setInputs(d, f0, 1);
+            env.clear();
+            for (int b = 0; b < 80; ++b) {
+                d.process();
+                const float *L = d.mOutL.buffer();
+                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx) {
+                    if (!std::isfinite(L[sIdx])) nf++;
+                    env.push_back(L[sIdx] * 2.0f);
+                }
+            }
+            int a = 0, b2 = int(env.size()) - 1;
+            while (a < b2 && fabsf(env[a])  < 1e-4f) a++;
+            while (b2 > a && fabsf(env[b2]) < 1e-4f) b2--;
+            env = std::vector<float>(env.begin() + a, env.begin() + b2 + 1);
+        };
+        auto zc = [](const std::vector<float> &e) {
+            int z = 0;
+            for (size_t i = 1; i < e.size(); ++i)
+                if ((e[i] >= 0.0f) != (e[i-1] >= 0.0f)) z++;
+            return z;
+        };
+        auto at = [](const std::vector<float> &e, float f) {
+            return e[size_t(f * (e.size() - 1))];
+        };
+        std::vector<float> e0, e1;
+        render(2, 0.0f, e0); render(2, 1.0f, e1);           // sinc  (shape 2)
+        {   const bool ok = zc(e1) >= zc(e0) + 6;
+            printf("  [%s] sinc: ring density  zc %d -> %d\n", ok?"PASS":"FAIL", zc(e0), zc(e1));
+            if (!ok) fails++; }
+        render(4, 0.0f, e0); render(4, 1.0f, e1);           // decay (shape 4)
+        {   const bool ok = at(e0, 0.3f) < 0.08f && at(e1, 0.3f) > 0.30f;
+            printf("  [%s] decay: fall time  env@30%% %.3f -> %.3f\n", ok?"PASS":"FAIL",
+                   at(e0,0.3f), at(e1,0.3f));
+            if (!ok) fails++; }
+        render(6, 0.0f, e0); render(6, 1.0f, e1);           // tukey (shape 6)
+        {   const bool ok = at(e0, 0.05f) > 0.9f && at(e1, 0.05f) < 0.15f;
+            printf("  [%s] tukey: taper  env@5%%  %.3f -> %.3f\n", ok?"PASS":"FAIL",
+                   at(e0,0.05f), at(e1,0.05f));
+            if (!ok) fails++; }
+        printf("winbankt: %s (nonFinite=%d)\n", (fails == 0 && nf == 0) ? "PASS" : "FAIL", nf);
+        return (fails == 0 && nf == 0) ? 0 : 1;
     }
 
 #ifdef HAS_SPEED
