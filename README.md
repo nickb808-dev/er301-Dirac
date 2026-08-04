@@ -110,8 +110,8 @@ Below the sample tasks in the same menu:
 
 ## Reading the grain field
 
-The phosphor scope isn't decoration — every dimension of a grain's life is drawn.
-One glyph = one grain; learn the mappings and the field becomes a diagnostic:
+Every aspect of a grain's life is drawn.
+One arrow = one grain. If you learn the properties you can tell what is going on sonically with your eyes.
 
 | You see | It's showing | Controls that move it |
 |---|---|---|
@@ -126,7 +126,7 @@ One glyph = one grain; learn the mappings and the field becomes a diagnostic:
 | Glyph points **down** (stem above) | Reverse grain | `rev` |
 | **Hollow** outline instead of filled | Regeneration grain (reading the feedback ring, sample mode) | `fdbk` |
 | Overall brightness | The grain's real loudness | `level`, `compress`, source dynamics |
-| Some glyphs are more **dim** | Spectrally dark grains (low cutoff) — also the binaural far-ear shadow | `color`, `bin` |
+| Some glyphs are more **dim** such as Spectrally dark grains and the binaural far-ear sounds | `color`, `bin` |
 | Trails linger ~2× longer | Diffusion | **Diffuse** (menu) |
 | Whole constellation freezes | Cloud frozen (grains looping) | `hold` |
 | **✳ snowflake**, top-right — Capture ring frozen | **Capture: freeze** (menu) |
@@ -173,8 +173,7 @@ quiet for the heads that can't reach one. Wide HeadSpread gets you both. HeadTun
 (pitch) is never affected, so the chord holds at any Snap setting.
 
 **Compression.** At spawn, Dirac peeks the source where each grain will read and
-applies a makeup gain toward a target — so quiet passages still speak in sparse
-clouds without making loud ones clip.
+applies a makeup gain toward a target.
 
 **The strip follows the source mode.** Mode-gated controls are placed and removed as
 you attach or detach a sample rather than left on screen doing nothing. Attaching
