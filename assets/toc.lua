@@ -1,4 +1,4 @@
--- toc.lua — package manifest for dirac v0.1.18
+-- toc.lua — package manifest for dirac v0.2.10
 return {
   name    = "dirac",
   title   = "Dirac",
