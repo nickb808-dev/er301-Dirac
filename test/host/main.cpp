@@ -3,6 +3,8 @@
 //   ident  <out.raw>   deterministic renders (sample + live-feedback + texture nodes) → raw floats
 //   asan               long-grain (2 s) + hold + extreme pitch, run to completion (OOB probe)
 //   seam   <label>     detuned long grains parked at the sample loop boundary → R-channel max delta
+//   nan                every input poisoned (NaN / ±inf), live + sample: finite, recovers
+//   pitch              grain pitch exact anywhere in a 60 s sample, and live
 #include "Dirac.h"
 #include <cstdio>
 #include <cstring>
@@ -799,6 +801,135 @@ int main(int argc, char **argv)
             if (!ok) fails++; }
         printf("winbankt: %s (nonFinite=%d)\n", (fails == 0 && nf == 0) ? "PASS" : "FAIL", nf);
         return (fails == 0 && nf == 0) ? 0 : 1;
+    }
+
+    // ── nan (v0.2.11): poison every input with NaN / +inf / -inf in turn,
+    // live and sample mode; the output must stay finite and the unit must
+    // recover once the input is good again (standard §5). Until 0.2.10 the
+    // control reads were not sanitized and this passed only because of the
+    // order std::max/std::min compare in.
+    if (!strcmp(argv[1], "nan")) {
+        const int N = 48000 * 4;
+        std::vector<float> st(N);
+        for (int i = 0; i < N; ++i) st[i] = 0.5f * sinf(2.0f * 3.14159265f * 220.0f * float(i) / 48000.0f);
+        int problems = 0, cases = 0;
+        for (int mode = 0; mode < 2; ++mode) {
+            for (int k = 0; ; ++k) {
+                Dirac d;
+                od::Inlet *mine[] = { &d.mIn, &d.mPlayheadIn, &d.mRateIn, &d.mPosJtrIn, &d.mSprdIn, &d.mDetuneIn, &d.mLevelIn,
+                    &d.mRevProbIn, &d.mPsprdIn, &d.mTextureIn, &d.mGrainsIn, &d.mFireIn, &d.mHoldIn, &d.mSemiShiftIn,
+                    &d.mGrainLenIn, &d.mMixIn, &d.mFeedbackIn, &d.mCompressIn, &d.mBinauralIn, &d.mScaleIn, &d.mVoctIn,
+                    &d.mSpeedIn, &d.mHeadsIn, &d.mHeadSpreadIn, &d.mHeadTuneIn, &d.mSnapIn, &d.mColorIn, &d.mTiltIn,
+                    &d.mTiltSprdIn, &d.mWindowIn };
+                const int nIn = int(sizeof(mine) / sizeof(mine[0]));
+                if (k >= nIn) break;
+                for (float poison : {NAN, INFINITY, -INFINITY}) {
+                    Dirac e; rng = 0x7a7a;
+                    od::Inlet *ein[] = { &e.mIn, &e.mPlayheadIn, &e.mRateIn, &e.mPosJtrIn, &e.mSprdIn, &e.mDetuneIn, &e.mLevelIn,
+                        &e.mRevProbIn, &e.mPsprdIn, &e.mTextureIn, &e.mGrainsIn, &e.mFireIn, &e.mHoldIn, &e.mSemiShiftIn,
+                        &e.mGrainLenIn, &e.mMixIn, &e.mFeedbackIn, &e.mCompressIn, &e.mBinauralIn, &e.mScaleIn, &e.mVoctIn,
+                        &e.mSpeedIn, &e.mHeadsIn, &e.mHeadSpreadIn, &e.mHeadTuneIn, &e.mSnapIn, &e.mColorIn, &e.mTiltIn,
+                        &e.mTiltSprdIn, &e.mWindowIn };
+                    od::Sample smp; smp.mSampleCount = N; smp.mChannelCount = 1; smp.mpData = st.data();
+                    if (mode == 1) e.setSample(&smp);
+                    const Ctl c[] = {{"Playhead",0.3f},{"Rate",4.0f},{"Level",1.0f},{"Texture",0.5f},{"Grains",12.0f},
+                                     {"GrainLen",0.05f},{"Mix",1.0f},{"Spread",0.5f},{"Feedback",0.5f}};
+                    setInputs(e, c, sizeof(c)/sizeof(c[0]));
+                    for (int q = 0; q < FRAMELENGTH; ++q) e.mSpeedIn.buffer()[q] = 1.0f;
+                    auto runb = [&](int nb, double &rms, int &nf) {
+                        rms = 0; nf = 0; long cnt = 0;
+                        for (int b = 0; b < nb; ++b) {
+                            if (ein[k] != &e.mIn)
+                                for (int q = 0; q < FRAMELENGTH; ++q) e.mIn.buffer()[q] = 0.5f * sinf(0.03f * float(b * FRAMELENGTH + q));
+                            e.process();
+                            for (int q = 0; q < FRAMELENGTH; ++q) {
+                                const float v = e.mOutL.buffer()[q], w = e.mOutR.buffer()[q];
+                                if (!std::isfinite(v) || !std::isfinite(w)) ++nf;
+                                rms += double(v) * v; ++cnt;
+                            }
+                        }
+                        rms = sqrt(rms / double(cnt));
+                    };
+                    double r0, r1, r2; int n0, n1, n2;
+                    runb(200, r0, n0);
+                    const float save = ein[k]->buffer()[0];
+                    for (int q = 0; q < FRAMELENGTH; ++q) ein[k]->buffer()[q] = poison;
+                    runb(20, r1, n1);
+                    for (int q = 0; q < FRAMELENGTH; ++q) ein[k]->buffer()[q] = save;
+                    runb(400, r2, n2);
+                    ++cases;
+                    const bool bad = n0 || n1 || n2 || (r0 > 0.01 && r2 < 0.2 * r0);
+                    if (bad) {
+                        ++problems;
+                        printf("  FAIL %s %-10s %s: rms before %.3f after %.3f, nonfinite %d/%d\n", mode ? "sample" : "live",
+                               ein[k]->mName, std::isnan(poison) ? "nan" : (poison > 0 ? "+inf" : "-inf"), r0, r2, n1, n2);
+                    }
+                    e.setSample(nullptr);
+                }
+                (void)d;
+            }
+        }
+        printf("nan: %s (%d problems over %d cases)\n", problems ? "FAIL" : "PASS", problems, cases);
+        return problems ? 1 : 0;
+    }
+
+    // ── pitch (v0.2.11): a grain plays at its transposition anywhere in a
+    // long sample, and in live mode. Until 0.2.10 the read position was one
+    // float: +1 st was 5 cents sharp from ~1 s and played at UNISON past
+    // 21.8 s (2^20 samples). Single 1 s grain on a 60 s 220 Hz sine, pitch by
+    // zero crossings; limit 0.5 cents.
+    if (!strcmp(argv[1], "pitch")) {
+        int fails = 0;
+        auto measure = [](const std::vector<float> &out, size_t from, size_t to) {
+            double first = -1, last = -1; int n = 0;
+            for (size_t i = from; i < to; ++i) if (out[i-1] < 0 && out[i] >= 0) {
+                const double t = double(i - 1) + out[i-1] / (out[i-1] - out[i]);
+                if (first < 0) first = t; last = t; ++n; }
+            return (n > 1) ? (n - 1) * 48000.0 / (last - first) : 0.0;
+        };
+        const int N = 48000 * 60;
+        std::vector<float> st(N);
+        for (int i = 0; i < N; ++i) st[i] = float(sin(2.0 * 3.14159265358979 * 220.0 * double(i) / 48000.0));
+        for (float semi : {1.0f, -5.0f, 7.0f}) for (float ph : {0.02f, 0.6f, 0.95f}) {
+            Dirac d;
+            od::Sample smp; smp.mSampleCount = N; smp.mChannelCount = 1; smp.mpData = st.data();
+            d.setSample(&smp);
+            const Ctl c[] = {{"Playhead",ph},{"Rate",0.0f},{"Level",1.0f},{"Texture",1.0f},{"Grains",1.0f},
+                             {"GrainLen",1.0f},{"SemiShift",semi},{"Mix",1.0f},{"Spread",0.0f}};
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            std::vector<float> out;
+            for (int b = 0; b < 400; ++b) {
+                for (int q = 0; q < FRAMELENGTH; ++q) d.mFireIn.buffer()[q] = (b == 0 && q < 4) ? 1.0f : 0.0f;
+                d.process();
+                for (int q = 0; q < FRAMELENGTH; ++q) out.push_back(d.mOutL.buffer()[q]);
+            }
+            const double f = measure(out, 9600, 38400), want = 220.0 * pow(2.0, semi / 12.0);
+            const double cents = 1200.0 * log2(f / want);
+            const bool ok = fabs(cents) < 0.5;
+            if (!ok) ++fails;
+            printf("  sample %+3.0f st at %4.1f s: %+7.2f cents  %s\n", semi, ph * 60.0f, cents, ok ? "ok" : "FAIL");
+            d.setSample(nullptr);
+        }
+        for (float semi : {1.0f, -5.0f}) {
+            Dirac d;
+            const Ctl c[] = {{"Playhead",0.5f},{"Rate",0.0f},{"Level",1.0f},{"Texture",1.0f},{"Grains",1.0f},
+                             {"GrainLen",0.5f},{"SemiShift",semi},{"Mix",1.0f},{"Spread",0.0f}};
+            setInputs(d, c, sizeof(c)/sizeof(c[0]));
+            std::vector<float> out; long t = 0;
+            for (int b = 0; b < 1600; ++b) {
+                for (int q = 0; q < FRAMELENGTH; ++q, ++t) d.mIn.buffer()[q] = float(sin(2.0 * 3.14159265358979 * 220.0 * double(t) / 48000.0));
+                for (int q = 0; q < FRAMELENGTH; ++q) d.mFireIn.buffer()[q] = (b == 1200 && q < 4) ? 1.0f : 0.0f;
+                d.process();
+                if (b >= 1200) for (int q = 0; q < FRAMELENGTH; ++q) out.push_back(d.mOutL.buffer()[q]);
+            }
+            const double f = measure(out, 4800, 19200), want = 220.0 * pow(2.0, semi / 12.0);
+            const double cents = 1200.0 * log2(f / want);
+            const bool ok = fabs(cents) < 0.5;
+            if (!ok) ++fails;
+            printf("  live   %+3.0f st:            %+7.2f cents  %s\n", semi, cents, ok ? "ok" : "FAIL");
+        }
+        printf("pitch: %s\n", fails ? "FAIL" : "PASS");
+        return fails ? 1 : 0;
     }
 
 #ifdef HAS_SPEED

@@ -37,7 +37,7 @@ TOOLCHAIN ?= docker
 
 PKG     := dirac
 MODULE  := libdirac
-VERSION := 0.2.10
+VERSION := 0.2.11
 ARCH    := am335x
 
 SRCDIR  := src
@@ -253,7 +253,42 @@ docker-build: docker-image | $(OUTDIR)
 PKGDIR  := build/$(ARCH)
 PKGFILE := $(PKGDIR)/$(PKG)-$(VERSION).pkg
 
-pkg: check-stack $(PKGFILE)
+pkg: check-api check-ports check-version check-lua check-stack $(PKGFILE)
+
+# ── gates (v0.2.11) — the same four Noether and Landau run before packaging ──
+# Every head:method() Lua calls must be visible to SWIG (declared above the
+# header's #ifndef SWIGLUA), or it is a nil call on the device.
+check-api:
+	@sh tools/check-swig-api.sh src/Dirac.h assets/Dirac.lua assets/WaveHeadView.lua assets/GrainFieldView.lua
+
+# Every od::Inlet / od::Outlet must be addInput()/addOutput()'d, and every
+# port Lua connects to on the head must be one of them (the host stub's
+# addInput is a no-op, so a missing one is green here and a failed connect
+# on the device).
+check-ports:
+	@sh tools/check-ports.sh src/Dirac.h src/Dirac.cpp assets/Dirac.lua
+
+# The version in the Makefile and the toc must agree.
+check-version:
+	@sh tools/check-version.sh Makefile assets/toc.lua
+
+# A Lua file-local used above its declaration is a nil global at runtime;
+# luac catches what does not parse.
+check-lua:
+	@sh tools/check-lua-scope.sh assets/*.lua
+	@sh tools/check-lua-parse.sh assets/*.lua
+
+# ── host tests (no hardware) ────────────────────────────────────────────────
+# The self-checking modes (each exits non-zero on failure). ident / seam /
+# headsnap / speed print numbers for comparison and are run by hand.
+HOSTMODES := pitch nan fieldpos snapt colort difft freezet sfbt headscale fbdc windowt tiltt winbankt
+hosttest: check-api check-ports check-version check-lua
+	g++ -std=c++11 -O2 -ffast-math -fno-finite-math-only -DHAS_SPEED -Itest/host -Isrc src/Dirac.cpp test/host/main.cpp -o test/t
+	@for m in $(HOSTMODES); do ./test/t $$m > /tmp/dirac-hosttest-$$m.txt 2>&1 \
+	  && echo "  ok   $$m" || { cat /tmp/dirac-hosttest-$$m.txt; echo "  FAIL $$m"; exit 1; }; done
+	g++ -std=c++17 -O1 -g -DHAS_SPEED -fsanitize=address,undefined -Itest/host -Isrc \
+	  src/Dirac.cpp test/host/main.cpp -o test/t_asan
+	./test/t_asan asan
 
 # The ER-301's audio thread has a 2 KB stack (ER301-UNIT-STANDARD.md §2a):
 # Noether 0.8.10 overflowed it with a 1 KB local and distorted ALL audio

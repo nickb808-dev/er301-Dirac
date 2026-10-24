@@ -5,7 +5,7 @@ the audio, windowed, pitched by playback speed, and layered.
 It runs on a live input by default and switches to granulating a loaded
 sample as soon as you select one from the menu.
 
-Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.10**
+Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.11**
 
 ---
 
@@ -248,12 +248,25 @@ g++ -std=c++11 -O2 -ffast-math -Itest/host -Isrc src/Dirac.cpp test/host/main.cp
 ./t asan            # torture configs (build with -std=c++17 -fsanitize=address,undefined)
 ./t seam <label>    # R-channel click metric at a sample loop boundary
 ./t snapt           # Snap: mean |grain start - nearest onset| on a click track
+./t pitch           # grain pitch exact anywhere in a 60 s sample, and live
+./t nan             # every input poisoned with NaN / ±inf: finite, recovers
 ```
 
 ---
 
 ## Changelog (recent)
 
+- **0.2.11** — **Grains play in tune.** A grain's read position was a single
+  32-bit float holding the absolute sample position, and a float can't hold a
+  pitch step exactly once the position is large: +1 semitone was 5 cents sharp
+  from about a second into a sample, and past 21.8 s it played at **unison**
+  (live mode was up to 2 cents off). Positions are now a whole sample plus a
+  fraction, so every transposition is exact anywhere in any sample. This also
+  removed a library call (`floorf`) from every source read — up to ~4000 a
+  block. The integer dials (grains, semi, scale, shape, heads, htune) now step
+  in whole numbers at every resolution and show no decimals. Every control
+  read is sanitized, and the build gains the SWIG / port / version / Lua gates
+  and a `make hosttest` with new `pitch` and `nan` suites.
 - **0.2.10** — **Tilt**: a bipolar dial for the envelope's *peak position*,
   warping the time axis of whatever window is active — every shape gains a
   continuous decay↔swell axis (tilted bell = the classic grainlet family;

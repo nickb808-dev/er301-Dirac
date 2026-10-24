@@ -254,20 +254,20 @@ void Dirac::buildEnvTables()
 // plain args. The render loop pre-loads cap/sd/nc ONCE per grain per block — the
 // out-buffer stores are same-typed float writes, so the compiler could not hoist
 // the mpSample->mpData / mChannelCount / mCapBuf loads out of the hot loop itself.
+// v0.2.11: the position arrives as a whole sample + a fraction, so there is
+// no floorf here — on the A8 (no VFP round instruction) floorf is a libm CALL,
+// and this ran it once per source read: up to ~4000 calls a block.
 inline float Dirac::readHoisted(const float *cap, const float *sd, int nc,
-                                int sampleCount, bool live, float pos)
+                                int sampleCount, bool live, int i0, float f)
 {
-    const float fp = floorf(pos);
-    const float f  = pos - fp;
     if (live) {
-        const int i0 = int(fp) & (kCapBufSize - 1);
+        i0 &= (kCapBufSize - 1);
         const int i1 = (i0 + 1) & (kCapBufSize - 1);
         return cap[i0] + f * (cap[i1] - cap[i0]);
     }
     if (!sd || sampleCount <= 0) return 0.0f;
-    // pos is kept in [0, sampleCount) by the render loop, so NO per-sample modulo
-    // (the A8 has no integer divide). i0 is already in range; i1 wraps at the end.
-    int i0 = int(fp);
+    // i0 is kept in [0, sampleCount) by the render loop, so NO per-sample modulo
+    // (the A8 has no integer divide). i1 wraps at the end.
     // Defensive clamp: the render loop's single compare-subtract wrap assumes the
     // pitch increment is smaller than the sample. A tiny sample + extreme pitch
     // (high SemiShift/Psprd) can leave i0 ≥ sampleCount → an out-of-bounds read.
@@ -286,9 +286,10 @@ inline float Dirac::readHoisted(const float *cap, const float *sd, int nc,
 // Convenience wrapper for cold paths (spawn-time compress peek).
 inline float Dirac::readSrc(float pos, bool live, int sampleCount) const
 {
+    const float fp = floorf(pos);
     return readHoisted(mCapBuf.data(), mpSample ? mpSample->mpData : nullptr,
                        mpSample ? int(mpSample->mChannelCount) : 1,
-                       sampleCount, live, pos);
+                       sampleCount, live, int(fp), pos - fp);
 }
 
 /* ── findSlot ──────────────────────────────────────────────────────────────── */
@@ -378,12 +379,15 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
     //   0 → freshest feedback (one grain-length back) = tightest regeneration
     //   1 → longest delay (most of the ring)          = long echo / smear
     float headGap = 0.0f;   // spacing between adjacent playheads (Snap lane width)
-    float basePos;
+    // double (v0.2.11): a float position is 0.25 samples coarse at 60 s, and
+    // the fractional ITD / jitter below would be rounded away. Spawn-time
+    // only, so double costs nothing that matters.
+    double basePos;
     if (liveMode) {
         const float minDelay = float(grainDuration);
         const float maxDelay = float(kCapBufSize - grainDuration);
         const float delay    = minDelay + playhead * (maxDelay - minDelay);
-        basePos = float(mCapWrite) - delay;   // negative is fine: readSrc masks the ring
+        basePos = double(mCapWrite) - double(delay);   // negative is fine: placed into the ring below
         // Head offset = further back in the ring (older material per head), scaled
         // into the ROOM remaining behind the knob position (v0.2.1). Scaling by the
         // full span let delay + offset exceed maxDelay near playh 1 — the ring mask
@@ -392,7 +396,7 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
         // always fit, order stays monotonic, and spacing shrinks gracefully to
         // stacked at playh = 1 (the same state HeadSpread ≈ 0 means).
         const float room = maxDelay - delay;
-        basePos -= headOff * room;
+        basePos -= double(headOff * room);
         headGap  = (heads > 1) ? (headSpread / float(heads)) * room : 0.0f;
     } else if (srcLive) {
         // Sample-mode REGEN grain (v0.2.2): tight anchor just behind the write
@@ -402,13 +406,13 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
         // head's pitch transpose still does, so regen grains join the chord).
         // The 4800-sample margin keeps posJtr's bipolar spray (±4800·posJtr)
         // behind the write head; the seam fade guards the rest.
-        basePos = float(mCapWrite) - float(grainDuration) - 4800.0f;
+        basePos = double(mCapWrite) - double(grainDuration) - 4800.0;
     } else {
-        const float span = float(sampleCount > 1 ? sampleCount - 1 : 0);
-        basePos = playhead * span + headOff * span;
+        const double span = double(sampleCount > 1 ? sampleCount - 1 : 0);
+        basePos = double(playhead) * span + double(headOff) * span;
         if (sampleCount > 0)                  // wrap the head offset into the sample
-            basePos -= float(sampleCount) * floorf(basePos / float(sampleCount));
-        headGap  = (heads > 1) ? (headSpread / float(heads)) * span : 0.0f;
+            basePos -= double(sampleCount) * floor(basePos / double(sampleCount));
+        headGap  = (heads > 1) ? float((headSpread / float(heads)) * span) : 0.0f;
     }
 
     // Pitch offset from the played root = Psprd scatter + this head's chord rung
@@ -426,7 +430,7 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
     const float incL      = expf(kLog2Over12 * semis);   // 2^(semis/12), matches detuneRatio
 
     const float jit      = (posJtr > 0.0f) ? (posJtr * 4800.0f * randBipolar()) : 0.0f;
-    float       startPos = basePos + jit;
+    double      startPos = basePos + double(jit);
 
     // ── SNAP: onset-locked spawning (v0.2.0) ───────────────────────────────
     // Normally a grain reads wherever the metronome puts it, so granulating
@@ -464,7 +468,8 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
             const float lane = headGap * 0.5f;
             if (lane >= kMinLane && lane < win) win = lane;
         }
-        float bestPos = startPos, bestScore = -1e30f;
+        const float sp0 = float(startPos);
+        float bestPos = sp0, bestScore = -1e30f;
         for (int stage = 0; stage < 3; ++stage) {
             const float centre = bestPos;
             float stagePos = centre, stageScore = -1e30f;
@@ -487,7 +492,7 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
             win *= 2.0f / float(kCand - 1);         // next window = one grid step
         }
         if (bestScore > 0.0f)                       // only pull toward a real rise
-            startPos += snap * (bestPos - startPos);
+            startPos += double(snap * (bestPos - sp0));
     }
 
     // ── Per-grain leveling ("compression") ─────────────────────────────────
@@ -500,7 +505,7 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
         const float span   = float(grainDuration) * incL;
         float sum = 0.0f;
         for (int k = 0; k < nPeek; ++k) {
-            float pp = startPos + span * (float(k) / float(nPeek - 1));
+            float pp = float(startPos) + span * (float(k) / float(nPeek - 1));
             if (!srcLive && sampleCount > 0)          // wrap to match the grain's read
                 pp -= float(sampleCount) * floorf(pp / float(sampleCount));
             const float sv = readSrc(pp, srcLive, sampleCount);
@@ -527,7 +532,6 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
     g.pitchIncrR = incL * detuneRatio;
     g.scale      = scale;
     g.held       = held;
-    g.srcIndex   = int(startPos);
 
     // stereo pan (equal-power, centre = unity) — this is the azimuth proxy
     float pan = randBipolar() * sprd;
@@ -574,8 +578,30 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
     }
 
 
-    g.readPosL   = startPos - delayL;  g.readPos0L = g.readPosL;
-    g.readPosR   = startPos - delayR;  g.readPos0R = g.readPosR;
+    // Place the read positions: whole sample (wrapped into the ring or the
+    // sample) + fraction. floor() here is spawn-rate, not per sample.
+    {
+        const double pL = startPos - double(delayL), pR = startPos - double(delayR);
+        const double pp[2] = { pL, pR };
+        int idx[2]; float fr[2];
+        for (int c = 0; c < 2; ++c) {
+            double q = pp[c];
+            if (!(q > -1.0e9 && q < 1.0e9)) q = 0.0;          // sticky-NaN guard
+            if (!srcLive && sampleCount > 0)
+                q -= double(sampleCount) * floor(q / double(sampleCount));
+            const double fl = floor(q);
+            int i = int(fl);
+            float f = float(q - fl);
+            if (!(f >= 0.0f && f < 1.0f)) f = 0.0f;
+            if (srcLive) i &= (kCapBufSize - 1);
+            else if (sampleCount > 0) { if (i >= sampleCount || i < 0) i = 0; }
+            else i = 0;
+            idx[c] = i; fr[c] = f;
+        }
+        g.idxL = g.idx0L = idx[0]; g.fracL = g.frac0L = fr[0];
+        g.idxR = g.idx0R = idx[1]; g.fracR = g.frac0R = fr[1];
+        g.srcIndex = idx[0];
+    }
 
     g.startDelay = sampleOffset;
     g.pitchSemi  = semis;   // includes the head transpose → heads stack in the field viz
@@ -594,49 +620,54 @@ void Dirac::process()
     const int  sampleCount = mpSample ? int(mpSample->mSampleCount) : 0;
     const bool liveMode    = (sampleCount <= 0);
 
+    // Every control read is sanitize()d (v0.2.11, standard §5). Until 0.2.10
+    // NaN only fell out of the std::max(lo, std::min(x, hi)) clamps because
+    // of the order those compare — the standard's warning, and a -ffast-math
+    // build may assume no NaN at all. sanitize is the identity on finite
+    // values, so nothing else changes. Host `nan` covers every input.
     // ── Parameters ─────────────────────────────────────────────────────────
     // "Rate" is now a DENSITY control = target grain overlap. 0 = trigger-only;
     // otherwise the spawn rate is derived from grain length so grains overlap (no
     // more silent/gappy low end). Floored at kDensFloor so it never near-stops.
-    const float dens     = std::max(0.0f,  std::min(mRateIn.buffer()[0],   16.0f));
-    const float playhead = std::max(0.0f,  std::min(mPlayheadIn.buffer()[0], 1.0f));
-    const float posJtr   = std::max(0.0f,  std::min(mPosJtrIn.buffer()[0],  1.0f));
-    const float sprd     = std::max(0.0f,  std::min(mSprdIn.buffer()[0],    1.0f));
-    const float detune   = std::max(0.0f,  std::min(mDetuneIn.buffer()[0],  2.0f));
-    const float level    = std::max(0.0f,  std::min(mLevelIn.buffer()[0],   1.0f));
-    const float mix      = std::max(0.0f,  std::min(mMixIn.buffer()[0],     1.0f));
-    const float feedback = std::max(0.0f,  std::min(mFeedbackIn.buffer()[0], 1.0f));
-    const float compress = std::max(0.0f,  std::min(mCompressIn.buffer()[0], 1.0f));
-    const float binaural = std::max(0.0f,  std::min(mBinauralIn.buffer()[0], 1.0f));
-    const int   scale    = std::max(0, std::min(int(mScaleIn.buffer()[0] + 0.5f), 6));
+    const float dens     = std::max(0.0f,  std::min(sanitize(mRateIn.buffer()[0]),   16.0f));
+    const float playhead = std::max(0.0f,  std::min(sanitize(mPlayheadIn.buffer()[0]), 1.0f));
+    const float posJtr   = std::max(0.0f,  std::min(sanitize(mPosJtrIn.buffer()[0]),  1.0f));
+    const float sprd     = std::max(0.0f,  std::min(sanitize(mSprdIn.buffer()[0]),    1.0f));
+    const float detune   = std::max(0.0f,  std::min(sanitize(mDetuneIn.buffer()[0]),  2.0f));
+    const float level    = std::max(0.0f,  std::min(sanitize(mLevelIn.buffer()[0]),   1.0f));
+    const float mix      = std::max(0.0f,  std::min(sanitize(mMixIn.buffer()[0]),     1.0f));
+    const float feedback = std::max(0.0f,  std::min(sanitize(mFeedbackIn.buffer()[0]), 1.0f));
+    const float compress = std::max(0.0f,  std::min(sanitize(mCompressIn.buffer()[0]), 1.0f));
+    const float binaural = std::max(0.0f,  std::min(sanitize(mBinauralIn.buffer()[0]), 1.0f));
+    const int   scale    = std::max(0, std::min(int(sanitize(mScaleIn.buffer()[0]) + 0.5f), 6));
     mVizSprd = sprd;  mVizDetune = detune;
-    const float revprob  = std::max(0.0f,  std::min(mRevProbIn.buffer()[0], 1.0f));
-    const float psprd    = std::max(0.0f,  std::min(mPsprdIn.buffer()[0],  12.0f));
-    const float texture  = std::max(0.0f,  std::min(mTextureIn.buffer()[0], 1.0f));
-    const int   grains   = std::max(1, std::min(int(mGrainsIn.buffer()[0] + 0.5f), kMaxGrains));
-    const bool  holdOn   = (mHoldIn.buffer()[0] > 0.5f);
+    const float revprob  = std::max(0.0f,  std::min(sanitize(mRevProbIn.buffer()[0]), 1.0f));
+    const float psprd    = std::max(0.0f,  std::min(sanitize(mPsprdIn.buffer()[0]),  12.0f));
+    const float texture  = std::max(0.0f,  std::min(sanitize(mTextureIn.buffer()[0]), 1.0f));
+    const int   grains   = std::max(1, std::min(int(sanitize(mGrainsIn.buffer()[0]) + 0.5f), kMaxGrains));
+    const bool  holdOn   = (sanitize(mHoldIn.buffer()[0]) > 0.5f);
     // Transpose = SemiShift (coarse, integer semitones) + V/Oct (smooth, 1 V = 1 oct).
     // Clamped to ±4 octaves so extreme reads don't alias into garbage.
-    const float semiKnob = roundf(std::max(-24.0f, std::min(mSemiShiftIn.buffer()[0], 24.0f)));
-    const float voct     = mVoctIn.buffer()[0];
+    const float semiKnob = roundf(std::max(-24.0f, std::min(sanitize(mSemiShiftIn.buffer()[0]), 24.0f)));
+    const float voct     = sanitize(mVoctIn.buffer()[0]);
     const float semiShift= std::max(-kMaxTranspose,
                              std::min(semiKnob + voct * kVoctToSemis, kMaxTranspose));
-    const float speed    = std::max(-4.0f, std::min(mSpeedIn.buffer()[0],  4.0f));
+    const float speed    = std::max(-4.0f, std::min(sanitize(mSpeedIn.buffer()[0]),  4.0f));
     // Multi-playhead (v0.2.0). heads = 1 → single-head path, bit-identical.
     // The Playheads option (menu) hard-bypasses the feature when Off, so a stray
     // Heads CV can't engage it and the spawn path stays on the classic branch.
     const bool  multiHead  = (mMultiHeadOpt.value() >= 2);
     const int   heads      = multiHead
-                           ? std::max(1, std::min(int(mHeadsIn.buffer()[0] + 0.5f), kMaxHeads))
+                           ? std::max(1, std::min(int(sanitize(mHeadsIn.buffer()[0]) + 0.5f), kMaxHeads))
                            : 1;
-    const float headSpread = std::max(0.0f, std::min(mHeadSpreadIn.buffer()[0], 1.0f));
-    const float headTune   = std::max(-12.0f, std::min(mHeadTuneIn.buffer()[0], 12.0f));
-    const float snap       = std::max(0.0f, std::min(mSnapIn.buffer()[0],  1.0f));
-    const float color      = std::max(0.0f, std::min(mColorIn.buffer()[0], 1.0f));
+    const float headSpread = std::max(0.0f, std::min(sanitize(mHeadSpreadIn.buffer()[0]), 1.0f));
+    const float headTune   = std::max(-12.0f, std::min(sanitize(mHeadTuneIn.buffer()[0]), 12.0f));
+    const float snap       = std::max(0.0f, std::min(sanitize(mSnapIn.buffer()[0]),  1.0f));
+    const float color      = std::max(0.0f, std::min(sanitize(mColorIn.buffer()[0]), 1.0f));
     // Tilt is BIPOLAR: −1 attack … 0 symmetric (default/unpatched) … +1 swell.
-    const float tilt       = std::max(-1.0f, std::min(mTiltIn.buffer()[0], 1.0f));
-    const float tiltSprd   = std::max(0.0f, std::min(mTiltSprdIn.buffer()[0], 1.0f));
-    const float grainLenSec = std::max(0.001f, std::min(mGrainLenIn.buffer()[0],
+    const float tilt       = std::max(-1.0f, std::min(sanitize(mTiltIn.buffer()[0]), 1.0f));
+    const float tiltSprd   = std::max(0.0f, std::min(sanitize(mTiltSprdIn.buffer()[0]), 1.0f));
+    const float grainLenSec = std::max(0.001f, std::min(sanitize(mGrainLenIn.buffer()[0]),
                                        float(kMaxGrainSamp) / float(kSampleRate)));
     const int   grainDuration = std::max(64, std::min(int(grainLenSec * float(kSampleRate)),
                                                       kMaxGrainSamp));
@@ -691,7 +722,7 @@ void Dirac::process()
     // Window shape (v0.2.10): read once per block; spawns capture it, so CV
     // here selects a shape PER GRAIN (S&H = shape scatter).
     {
-        const int w = int(mWindowIn.buffer()[0] + 0.5f);
+        const int w = int(sanitize(mWindowIn.buffer()[0]) + 0.5f);
         mCurWindow = (w < 0) ? 0 : (w > kWinShapes ? kWinShapes : w);
     }
 
@@ -708,6 +739,8 @@ void Dirac::process()
                 mScanPos = double(playhead);          // knob touched → re-seat scan
             mScanPos += double(speed) * double(blockSize) / double(sampleCount);
             mScanPos -= floor(mScanPos);              // wrap [0,1)
+            // sticky-NaN guard on the accumulator (positive test, §5)
+            if (!(mScanPos >= 0.0 && mScanPos < 1.0)) mScanPos = double(playhead);
             playheadEff = float(mScanPos);
         } else {
             mScanPos = double(playhead);              // parked: follow the knob
@@ -776,7 +809,8 @@ void Dirac::process()
         const float gR   = g.gainR * g.scale;
         const float incL = g.reverse ? -g.pitchIncrL : g.pitchIncrL;
         const float incR = g.reverse ? -g.pitchIncrR : g.pitchIncrR;
-        float readL = g.readPosL, readR = g.readPosR, envPh = g.envPhase;
+        int   iL = g.idxL, iR = g.idxR;
+        float fL = g.fracL, fR = g.fracR, envPh = g.envPhase;
         const float envIncA = g.envIncrA, envIncB = g.envIncrB;   // hoisted (Tilt two-rate)
         const float kHalfT  = float(kEnvTableSize / 2);
         const float lpAL = g.lpAlphaL, lpAR = g.lpAlphaR;   // head-shadow LP (1 = transparent)
@@ -800,47 +834,43 @@ void Dirac::process()
         else                      { eA = mHannTable.data(); eB = mTukeyTable.data(); ew = (g.envTex - 0.5f) * 2.0f; }
         const bool blend = (ew != 0.0f);
 
+        // The sample can change under a grain (a new file, a different
+        // length): re-wrap once per block if the index is out of range. Rare,
+        // so the modulo is fine here and never runs per sample.
+        const int nS = sampleCount;
+        if (!live && nS > 0) {
+            if (iL < 0 || iL >= nS) { iL %= nS; if (iL < 0) iL += nS; }
+            if (iR < 0 || iR >= nS) { iR %= nS; if (iR < 0) iR += nS; }
+        }
+
         // Edge fade (anti-click): fade the grain as its read nears a SEAM — the
         // write head in live mode (read/write collision guard) or the sample loop
         // boundary in sample mode (boundary crossfade). In a dense cloud the
         // overlapping grains cover the dip, so it reads as a crossfade. Skipped
         // for very short samples (no interior to fade toward).
-        const float period = live ? float(kCapBufSize) : float(sampleCount);
+        // v0.2.11: the distance is derived from the index every sample, not
+        // carried in a float accumulator — that accumulator drifted on long
+        // samples exactly as the read position did (a +1 st grain at 40 s
+        // lost ~0.06 samples a step), so the fade landed away from the seam.
+        const int   capW   = mCapWrite;
+        const int   capM   = kCapBufSize - 1;
+        const float period = live ? float(kCapBufSize) : float(nS);
         const float halfP  = 0.5f * period;
-        const bool  doSeam = live ? true : (sampleCount > int(4.0f * kSeamGuard));
-        // v0.1.17: the R read gets its OWN seam distance. With Detune the R read
-        // runs at a different speed and drifts far from L (»kSeamGuard over a long
-        // grain) — tracking only L let R cross a seam unfaded (R-channel click).
-        // ITD's read offset (Binaural) is the same story at smaller scale.
-        float relSeamL = 0.0f, relSeamR = 0.0f;
-        if (doSeam) {
-            const float basePL = live ? (readL - float(mCapWrite)) : readL;
-            relSeamL = basePL - period * floorf(basePL / period);   // [0, period)
-            if (st) {
-                const float basePR = live ? (readR - float(mCapWrite)) : readR;
-                relSeamR = basePR - period * floorf(basePR / period);
-            }
-        }
-
-        // Sample mode: keep read positions wrapped to [0, sampleCount) so the
-        // per-sample read uses a cheap compare/subtract instead of a software
-        // modulo (no hardware integer divide on the A8). Live mode masks in readSrc.
-        const float wN = float(sampleCount);
-        if (!live) {
-            readL -= wN * floorf(readL / wN);
-            readR -= wN * floorf(readR / wN);
-        }
+        const bool  doSeam = live ? true : (nS > int(4.0f * kSeamGuard));
 
         // Gate the per-sample edge fade: only run it when the read can actually come
         // within kSeamGuard of the seam THIS block. Most grains are far from the
-        // seam → skip all the fade work (the common-case CPU saving).
+        // seam → skip all the fade work (the common-case CPU saving). With Detune
+        // the R read runs at its own speed, so it gets its own distance (v0.1.17).
         bool seamActive = false;
         if (doSeam) {
-            const float distL = (relSeamL < halfP) ? relSeamL : (period - relSeamL);
+            const float relL = live ? float((iL - capW) & capM) + fL : float(iL) + fL;
+            const float distL = (relL < halfP) ? relL : (period - relL);
             const float travL = ((incL >= 0.0f) ? incL : -incL) * float(toRender);
             seamActive = (distL <= kSeamGuard + travL + 1.0f);
             if (st && !seamActive) {
-                const float distR = (relSeamR < halfP) ? relSeamR : (period - relSeamR);
+                const float relR = live ? float((iR - capW) & capM) + fR : float(iR) + fR;
+                const float distR = (relR < halfP) ? relR : (period - relR);
                 const float travR = ((incR >= 0.0f) ? incR : -incR) * float(toRender);
                 seamActive = (distR <= kSeamGuard + travR + 1.0f);
             }
@@ -860,25 +890,21 @@ void Dirac::process()
             }
             float fadeL = 1.0f, fadeR = 1.0f;
             if (seamActive) {
-                const float distL = (relSeamL < halfP) ? relSeamL : (period - relSeamL);
+                const float relL = live ? float((iL - capW) & capM) + fL : float(iL) + fL;
+                const float distL = (relL < halfP) ? relL : (period - relL);
                 if (distL < kSeamGuard) fadeL = distL * kInvSeamGuard;
-                relSeamL += incL;
-                if      (relSeamL >= period) relSeamL -= period;
-                else if (relSeamL <  0.0f)   relSeamL += period;
                 if (st) {                         // R fades on its own seam distance
-                    const float distR = (relSeamR < halfP) ? relSeamR : (period - relSeamR);
+                    const float relR = live ? float((iR - capW) & capM) + fR : float(iR) + fR;
+                    const float distR = (relR < halfP) ? relR : (period - relR);
                     if (distR < kSeamGuard) fadeR = distR * kInvSeamGuard;
-                    relSeamR += incR;
-                    if      (relSeamR >= period) relSeamR -= period;
-                    else if (relSeamR <  0.0f)   relSeamR += period;
                 } else {
                     fadeR = fadeL;
                 }
             }
             const float eL = env * fadeL;
             const float eR = env * fadeR;
-            const float sL = readHoisted(capData, smpData, smpNc, sampleCount, live, readL);
-            const float sR = st ? readHoisted(capData, smpData, smpNc, sampleCount, live, readR) : sL;
+            const float sL = readHoisted(capData, smpData, smpNc, nS, live, iL, fL);
+            const float sR = st ? readHoisted(capData, smpData, smpNc, nS, live, iR, fR) : sL;
             if (doShadow) {                       // binaural: one-pole LP on the far ear
                 lpL += lpAL * (sL - lpL);
                 lpR += lpAR * (sR - lpR);
@@ -888,21 +914,36 @@ void Dirac::process()
                 outL[outStart + s] += gL * eL * sL;
                 outR[outStart + s] += gR * eR * sR;
             }
-            readL += incL; readR += incR;
+            // advance: the fraction takes the step, whole samples move the
+            // index (truncate, then correct toward -inf for reverse steps —
+            // no floorf call)
+            fL += incL;
+            { int k = int(fL); if (fL < float(k)) --k; iL += k; fL -= float(k); }
+            if (st) {
+                fR += incR;
+                int k = int(fR); if (fR < float(k)) --k; iR += k; fR -= float(k);
+            }
             envPh += (envPh < kHalfT) ? envIncA : envIncB;   // Tilt: peak-relative rates
-            if (!live) {
-                if      (readL >= wN) readL -= wN; else if (readL < 0.0f) readL += wN;
-                if      (readR >= wN) readR -= wN; else if (readR < 0.0f) readR += wN;
+            if (live) {
+                iL &= capM; iR &= capM;
+            } else if (nS > 0) {
+                // one subtract covers any step shorter than the sample; a tiny
+                // sample at an extreme pitch takes the (rare) modulo
+                if (iL >= nS) { iL -= nS; if (iL >= nS) iL %= nS; }
+                else if (iL < 0) { iL += nS; if (iL < 0) { iL %= nS; if (iL < 0) iL += nS; } }
+                if (iR >= nS) { iR -= nS; if (iR >= nS) iR %= nS; }
+                else if (iR < 0) { iR += nS; if (iR < 0) { iR %= nS; if (iR < 0) iR += nS; } }
             }
         }
-        g.readPosL = readL; g.readPosR = readR; g.envPhase = envPh;
+        g.idxL = iL; g.fracL = fL; g.idxR = iR; g.fracR = fR; g.envPhase = envPh;
         g.lpStateL = lpL;   g.lpStateR = lpR;
         g.age += toRender;
         g.startDelay = 0;
         if (g.age >= g.duration) {
             if (g.held && holdOn) {
                 g.age = 0; g.envPhase = 0.0f;
-                g.readPosL = g.readPos0L; g.readPosR = g.readPos0R;
+                g.idxL = g.idx0L; g.fracL = g.frac0L;
+                g.idxR = g.idx0R; g.fracR = g.frac0R;
             } else {
                 g.active = false;
             }

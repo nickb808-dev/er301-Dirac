@@ -369,6 +369,16 @@ There is a `nan` test suite for this: poison every input port with NaN and
 inf in turn, require the output to stay finite, then require the unit to
 recover. Copy it.
 
+**Build the host tests with `-fno-finite-math-only`.** Apple clang's
+`-ffast-math` assumes NaN and inf cannot happen, and acts on it: it DELETES
+the `sanitize()` bit test above (NaN passes straight through) and folds every
+`std::isfinite` to true. A `nan` test built that way passes whatever the
+engine does — on this Mac, every unit's suite was blind until 2026-10-24.
+The device's gcc 10.3.1 keeps the bit test (checked in the disassembly:
+`bics` against 0x7f800000), so the flag makes the host build match the
+device while keeping the rest of fast-math. Make the test prove it can see:
+`volatile float n = NAN; if (std::isfinite(n)) fail("build cannot see NaN");`.
+
 ## 5a. The ARM has no hardware integer divide
 
 The ER-301's Cortex-A8 has **no integer divide instruction**. Every `%` and
@@ -704,6 +714,7 @@ can be looked up rather than rediscovered.
 | A control exists but cannot be patched | Branch with no view control | §1 |
 | A test passes on a case that is visibly broken | Probe point where the function is stationary | §6 |
 | ALL audio distorted until a reboot, the unit bypassed; crash report "STACK BLOWN" | A large local on the audio thread's 2 KB stack | §2a |
+| The host `nan` test passes, but a NaN still reaches the output on the device or in a probe | The host build used `-ffast-math` without `-fno-finite-math-only`: clang deleted `sanitize()` and `isfinite` | §5 |
 
 ## §12 — Attaching a sample: what the firmware actually guarantees
 

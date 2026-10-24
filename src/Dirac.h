@@ -154,30 +154,12 @@ public:
     // live read position, not the spawn position, so grains visibly drift as they
     // play (and reverse grains drift backwards).
     float getGrainReadPos01(int i) const {
-        const float p = mGrains[i].readPosL;
-        if (mpSample && mEndIndex > 0) {                    // sample mode
-            const float n = float(mEndIndex);
-            float q = p - n * floorf(p / n);                 // wrap into [0,n)
-            return q / n;
-        }
-        const float n = float(kCapBufSize);                 // live ring
-        float age = float(mCapWrite) - p;                   // samples behind the write head
-        age -= n * floorf(age / n);                         // wrap into [0,n)
-        return 1.0f - age / n;                              // 1 = newest
+        return pos01(mGrains[i].idxL, mGrains[i].fracL);
     }
     // Spawn position on the same [0,1] axis as getGrainReadPos01 — the anchor
     // for the position-mode read-span trail (v0.2.5).
     float getGrainSpawnPos01(int i) const {
-        const float p = mGrains[i].readPos0L;
-        if (mpSample && mEndIndex > 0) {
-            const float n = float(mEndIndex);
-            float q = p - n * floorf(p / n);
-            return q / n;
-        }
-        const float n = float(kCapBufSize);
-        float age = float(mCapWrite) - p;
-        age -= n * floorf(age / n);
-        return 1.0f - age / n;
+        return pos01(mGrains[i].idx0L, mGrains[i].frac0L);
     }
     float getVizSpread()          const { return mVizSprd; }
     float getVizDetune()          const { return mVizDetune; }
@@ -215,7 +197,7 @@ public:
     int   getCapWritePos()        const { return mCapWrite; }  // baseline crawl; parks on Freeze
     // Harness-facing accessors (v0.2.0): spawn read position + current pan
     // gains, so the host tests don't need to reach into private grain state.
-    float getGrainSpawnPos(int i) const { return mGrains[i].readPos0L; }
+    float getGrainSpawnPos(int i) const { return float(mGrains[i].idx0L) + mGrains[i].frac0L; }
     float getGrainGainL(int i)    const { return mGrains[i].gainL; }
     float getGrainGainR(int i)    const { return mGrains[i].gainR; }
 
@@ -246,8 +228,18 @@ private:
         int   age      = 0;
         int   startDelay = 0;
         int   srcIndex = 0;      // integer source position (head-display tick)
-        float readPosL = 0.0f, readPosR = 0.0f;   // fractional read positions
-        float readPos0L = 0.0f, readPos0R = 0.0f; // spawn positions (hold loop)
+        // READ POSITION = a whole sample + a fraction in [0,1) (v0.2.11). The
+        // index is kept wrapped (sample: [0, count); live: masked to the
+        // ring). Until 0.2.10 it was ONE float holding the absolute position,
+        // and a float cannot hold a pitch step exactly once the position is
+        // large: past 2^20 samples (21.8 s) a +1 semitone step (1.0594) rounded
+        // to 1.0 and the grain played at unison; at 1-3 s it was already 5
+        // cents sharp. Measured, see memory.md. The fraction never exceeds
+        // 1 + |step|, so its precision does not depend on where the grain is.
+        int   idxL = 0, idxR = 0;
+        float fracL = 0.0f, fracR = 0.0f;
+        int   idx0L = 0, idx0R = 0;                 // spawn positions (hold loop)
+        float frac0L = 0.0f, frac0R = 0.0f;
         float pitchIncrL = 1.0f, pitchIncrR = 1.0f;
         float envPhase = 0.0f;                    // envelope table phase
         float envIncrA = 0.0f, envIncrB = 0.0f;   // phase rate before/after the
@@ -350,7 +342,18 @@ private:
     // loads OUT of the hot loop (same-typed float stores to the out buffers may alias
     // member loads, so the compiler cannot hoist them itself).
     static inline float readHoisted(const float *cap, const float *sd, int nc,
-                                    int sampleCount, bool live, float pos);
+                                    int sampleCount, bool live, int i0, float f);
+    // A read position on the viz's [0,1] axis (sample: start..end; live:
+    // oldest..newest in the ring).
+    float pos01(int idx, float frac) const {
+        if (mpSample && mEndIndex > 0) {
+            float q = (float(idx) + frac) / float(mEndIndex);
+            return q < 0.0f ? 0.0f : (q > 1.0f ? 1.0f : q);
+        }
+        float age = float((mCapWrite - idx) & (kCapBufSize - 1)) - frac;   // behind the write head
+        if (age < 0.0f) age += float(kCapBufSize);
+        return 1.0f - age / float(kCapBufSize);
+    }
     inline float readSrc(float pos, bool live, int sampleCount) const;
     void  spawnGrain(float playhead, int sampleCount, float posJtr, float sprd,
                      float detune, float level, bool reverseProb,

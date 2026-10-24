@@ -422,13 +422,24 @@ function Dirac:onLoadViews(objects, branches)
   controls.wave  = WaveHeadView  { head = objects.head, width = 4 * app.SECTION_PLY }
   controls.field = GrainFieldView { head = objects.head, width = app.SECTION_PLY }
 
-  local function gb(name, btn, desc, map, bias, gainMap, units)
+  local function gb(name, btn, desc, map, bias, gainMap, units, precision)
     controls[name] = GainBias {
       button = btn, description = desc, branch = branches[name],
       gainbias = objects[name .. "Param"], range = objects[name .. "Range"],
-      biasMap = map, initialBias = bias,
+      biasMap = map, initialBias = bias, biasPrecision = precision,
       gainMap = gainMap or Encoder.getMap("[-1,1]"), biasUnits = units,
     }
+  end
+  -- A whole-number dial (v0.2.11): rounding 1 snaps EVERY step (fine and
+  -- superfine too) to an integer and precision 0 drops the decimals. A coarse
+  -- radix alone gave whole coarse steps but fine turns between them that
+  -- displayed "7.362" and did nothing (the engine rounds). Same as Noether's
+  -- Bars. CV into these stays continuous; the engine rounds it.
+  local function intMap(lo, hi)
+    local m = app.LinearDialMap(lo, hi)
+    m:setRounding(1)
+    m:setCoarseRadix(hi - lo)
+    return m
   end
 
   gb("playhead", "playh", "Read pos; live: fb delay", Encoder.getMap("[0,1]"), 0.0)
@@ -440,12 +451,12 @@ function Dirac:onLoadViews(objects, branches)
   -- Multi-playhead (v0.2.0): N heads read the same buffer, dealt round-robin.
   -- Heads steps in whole units (1..4) — grains are dealt to discrete heads and
   -- the DSP rounds anyway; same integer-dial pattern as Grains/Semitone below.
-  local headsMap = app.LinearDialMap(1, 4);  headsMap:setCoarseRadix(3)
-  gb("heads",      "heads", "Playheads (1 = classic)", headsMap, 1.0,
-     app.LinearDialMap(-4, 4))
+  gb("heads",      "heads", "Playheads (1 = classic)", intMap(1, 4), 1.0,
+     app.LinearDialMap(-4, 4), nil, 0)
   gb("headspread", "hsprd", "Head position offset", Encoder.getMap("[0,1]"), 0.0)
-  gb("headtune",   "htune", "Head interval (st)", app.LinearDialMap(-12, 12), 0.0,
-     app.LinearDialMap(-12, 12))
+  -- whole semitones on the dial (the chord ladder); CV stays free
+  gb("headtune",   "htune", "Head interval (st)", intMap(-12, 12), 0.0,
+     app.LinearDialMap(-12, 12), nil, 0)
   gb("rate",     "dens",  "0 = trig only", app.LinearDialMap(0, 16), 3.0, app.LinearDialMap(-16, 16))
   gb("posjtr",   "posJtr","Position jitter", Encoder.getMap("[0,1]"), 0.0)
   gb("spread",   "sprd",  "Stereo spread", Encoder.getMap("[0,1]"), 0.5)
@@ -461,9 +472,8 @@ function Dirac:onLoadViews(objects, branches)
   -- S&H here scatters shape per grain. 0 normal · 1 bell · 2 sinc · 3 tri ·
   -- 4 decay · 5 ramp · 6 tukey · 7 square. (A menu OptionControl can only
   -- ever display THREE choices — hence a dial.)
-  local windowMap = app.LinearDialMap(0, 7);  windowMap:setCoarseRadix(7)
-  gb("window",   "shape", "0 nrm 1bel 2snc 3tri 4dcy 5rmp 6tky 7sqr", windowMap, 0.0,
-     windowMap)
+  gb("window",   "shape", "0 nrm 1bel 2snc 3tri 4dcy 5rmp 6tky 7sqr", intMap(0, 7), 0.0,
+     app.LinearDialMap(-7, 7), nil, 0)
   -- Texture: in shape 0 the perc>hann>tukey morph; in shapes 1-7 that shape's
   -- own macro (width / ring density / curvature / time / taper / edge).
   gb("texture",  "textr", "Shape morph / shape macro", Encoder.getMap("[0,1]"), 0.5)
@@ -474,11 +484,8 @@ function Dirac:onLoadViews(objects, branches)
   gb("snap",     "snap",  "Lock grains to onsets", Encoder.getMap("[0,1]"), 0.0)
   gb("color",    "color", "Cutoff scatter: bright-dark", Encoder.getMap("[0,1]"), 0.0)
   -- Integer-stepping dials: Grains (1..16) and Semitone (−24..24) move in whole units.
-  local grainsMap = app.LinearDialMap(1, 16);   grainsMap:setCoarseRadix(15)
-  local semiMap   = app.LinearDialMap(-24, 24);  semiMap:setCoarseRadix(48)
-  local scaleMap  = app.LinearDialMap(0, 6);     scaleMap:setCoarseRadix(6)
-  gb("grains",   "grains","Polyphony cap", grainsMap, 12.0, app.LinearDialMap(-16, 16))
-  gb("semishift","semi",  "Transpose (st)", semiMap, 0.0, semiMap)
+  gb("grains",   "grains","Polyphony cap", intMap(1, 16), 12.0, app.LinearDialMap(-16, 16), nil, 0)
+  gb("semishift","semi",  "Transpose (st)", intMap(-24, 24), 0.0, app.LinearDialMap(-24, 24), nil, 0)
 
   controls.voct = Pitch {
     button      = "V/oct",
@@ -487,7 +494,8 @@ function Dirac:onLoadViews(objects, branches)
     offset      = objects.tune,
     range       = objects.tuneRange,
   }
-  gb("scale",    "scale", "Psprd quant: 0off 1chr 2Maj 3min 4penMaj 5penMin 6whole", scaleMap, 0.0, scaleMap)
+  gb("scale",    "scale", "Psprd quant: 0off 1chr 2Maj 3min 4penMaj 5penMin 6whole", intMap(0, 6), 0.0,
+     app.LinearDialMap(-6, 6), nil, 0)
   gb("grainlen", "gLen",  "Grain length (s)", app.LinearDialMap(0.001, 1.0), 0.050, app.LinearDialMap(-1.0, 1.0), app.unitSecs)
 
   controls.trig = Gate { button = "trig", description = "1 grain per trig",

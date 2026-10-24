@@ -3,3 +3,6 @@ MEMORY.md
 .claude/
 CLAUDE.local.md
 
+test/t
+test/t_asan
+test/t_asan.dSYM/
