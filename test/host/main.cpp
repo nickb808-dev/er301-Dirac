@@ -32,7 +32,7 @@ static void setInputs(Dirac &d, const Ctl *ctls, int n)
                          &d.mVoctIn,
                          &d.mHeadsIn, &d.mHeadSpreadIn, &d.mHeadTuneIn,
                          &d.mSnapIn,
-                         &d.mColorIn, &d.mTiltIn, &d.mTiltSprdIn, &d.mWindowIn,
+                         &d.mTiltIn, &d.mTiltSprdIn, &d.mWindowIn,
 #ifdef HAS_SPEED
                          &d.mSpeedIn,
 #endif
@@ -152,7 +152,7 @@ int main(int argc, char **argv)
             setInputs(d, c, sizeof(c)/sizeof(c[0]));
             run(d, 3000, nullptr, nullptr, &nf);
         }
-        // v0.2.2 torture: Color + Diffuse + sample-mode feedback + Snap +
+        // v0.2.2 torture: Diffuse + sample-mode feedback + Snap +
         // Hold all at once, tiny sample, freeze toggled mid-flight,
         // detach with the diffuser running.
         {
@@ -161,7 +161,7 @@ int main(int argc, char **argv)
             d.setSample(&smp);
             d.mDiffuseOpt.set(2);
             const Ctl c[] = {{"Playhead",0.9f},{"Rate",16.0f},{"Level",0.9f},{"Grains",16.0f},
-                             {"GrainLen",2.0f},{"Feedback",0.95f},{"Color",1.0f},{"Window",2.0f},{"Tilt",-0.9f},{"TiltSpread",1.0f},
+                             {"GrainLen",2.0f},{"Feedback",0.95f},{"Window",2.0f},{"Tilt",-0.9f},{"TiltSpread",1.0f},
                              {"SemiShift",24.0f},{"Detune",2.0f},{"Binaural",1.0f},{"Spread",1.0f},
                              {"Hold",1.0f},{"Snap",1.0f},{"PosJtr",1.0f}};
             setInputs(d, c, sizeof(c)/sizeof(c[0]));
@@ -346,31 +346,6 @@ int main(int argc, char **argv)
     }
 
 
-    // ── colort: Color darkens the cloud (per-grain cutoff scatter) ──────────
-    // Sine+noise sample; metric = first-difference RMS over RMS (HF ratio).
-    if (!strcmp(argv[1], "colort")) {
-        std::vector<float> st; od::Sample smp = makeSample(st, 48000, 1);
-        float hf[2]; int nf = 0;
-        for (int pass = 0; pass < 2; ++pass) {
-            Dirac d; rng = 0x5eed; d.setSample(&smp);
-            Ctl c[] = {{"Playhead",0.3f},{"Rate",8.0f},{"GrainLen",0.05f},{"Grains",16.0f},
-                       {"Level",0.7f},{"Texture",0.5f},{"Color",pass?1.0f:0.0f}};
-            setInputs(d, c, sizeof(c)/sizeof(c[0]));
-            double num = 0.0, den = 0.0; float prev = 0.0f;
-            for (int b = 0; b < 800; ++b) { d.process();
-                float *L = d.mOutL.buffer();
-                for (int sIdx = 0; sIdx < FRAMELENGTH; ++sIdx) {
-                    if (!std::isfinite(L[sIdx])) nf++;
-                    const float df = L[sIdx] - prev;
-                    num += df * df; den += L[sIdx] * L[sIdx]; prev = L[sIdx]; } }
-            hf[pass] = (den > 0.0) ? float(sqrt(num / den)) : 0.0f;
-            printf("color=%d  HF ratio = %.4f\n", pass, hf[pass]);
-        }
-        const bool pass = (hf[1] < hf[0] * 0.85f) && nf == 0;
-        printf("colort: %s (%.2fx darker)\n", pass ? "PASS" : "FAIL",
-               hf[1] > 0 ? hf[0] / hf[1] : 0.0f);
-        return pass ? 0 : 1;
-    }
 
     // ── difft: Diffuse spreads a click-grain in time, conserving energy ─────
     if (!strcmp(argv[1], "difft")) {
@@ -819,7 +794,7 @@ int main(int argc, char **argv)
                 od::Inlet *mine[] = { &d.mIn, &d.mPlayheadIn, &d.mRateIn, &d.mPosJtrIn, &d.mSprdIn, &d.mDetuneIn, &d.mLevelIn,
                     &d.mRevProbIn, &d.mPsprdIn, &d.mTextureIn, &d.mGrainsIn, &d.mFireIn, &d.mHoldIn, &d.mSemiShiftIn,
                     &d.mGrainLenIn, &d.mMixIn, &d.mFeedbackIn, &d.mCompressIn, &d.mBinauralIn, &d.mScaleIn, &d.mVoctIn,
-                    &d.mSpeedIn, &d.mHeadsIn, &d.mHeadSpreadIn, &d.mHeadTuneIn, &d.mSnapIn, &d.mColorIn, &d.mTiltIn,
+                    &d.mSpeedIn, &d.mHeadsIn, &d.mHeadSpreadIn, &d.mHeadTuneIn, &d.mSnapIn, &d.mTiltIn,
                     &d.mTiltSprdIn, &d.mWindowIn };
                 const int nIn = int(sizeof(mine) / sizeof(mine[0]));
                 if (k >= nIn) break;
@@ -828,7 +803,7 @@ int main(int argc, char **argv)
                     od::Inlet *ein[] = { &e.mIn, &e.mPlayheadIn, &e.mRateIn, &e.mPosJtrIn, &e.mSprdIn, &e.mDetuneIn, &e.mLevelIn,
                         &e.mRevProbIn, &e.mPsprdIn, &e.mTextureIn, &e.mGrainsIn, &e.mFireIn, &e.mHoldIn, &e.mSemiShiftIn,
                         &e.mGrainLenIn, &e.mMixIn, &e.mFeedbackIn, &e.mCompressIn, &e.mBinauralIn, &e.mScaleIn, &e.mVoctIn,
-                        &e.mSpeedIn, &e.mHeadsIn, &e.mHeadSpreadIn, &e.mHeadTuneIn, &e.mSnapIn, &e.mColorIn, &e.mTiltIn,
+                        &e.mSpeedIn, &e.mHeadsIn, &e.mHeadSpreadIn, &e.mHeadTuneIn, &e.mSnapIn, &e.mTiltIn,
                         &e.mTiltSprdIn, &e.mWindowIn };
                     od::Sample smp; smp.mSampleCount = N; smp.mChannelCount = 1; smp.mpData = st.data();
                     if (mode == 1) e.setSample(&smp);

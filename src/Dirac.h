@@ -85,12 +85,9 @@ public:
     od::Inlet  mHeadTuneIn  {"HeadTune"};   // pitch interval between heads [-12,+12] st
     // ── Snap (v0.2.0) ──────────────────────────────────────────────
     od::Inlet  mSnapIn      {"Snap"};       // pull grains onto transients [0,1]
-    // ── v0.2.2 ─────────────────────────────────────────────────────────────
-    // Color: per-grain LOW-PASS CUTOFF SCATTER (the spectral analog of Psprd).
-    // Each grain draws a random cutoff, darker with Color — dark and bright
-    // grains interleave in one cloud. Reuses the binaural head-shadow one-pole
-    // (min-combined per ear), so render cost is the already-gated LP path.
-    od::Inlet  mColorIn     {"Color"};      // cutoff scatter depth [0,1]; 0 = off
+    // (Color, the v0.2.2 per-grain cutoff scatter, was removed in v0.2.12:
+    // a one-pole at random cutoffs mostly above 3.5 kHz made no obvious
+    // difference in use. The one-pole itself stays — Binaural's head shadow.)
     // Tilt (v0.2.10): envelope PEAK POSITION, BIPOLAR [−1,1], default 0.
     // Warps the time axis of WHATEVER window is active (normal morph or a
     // fixed Window shape): −1 → peak at the grain's start (any shape becomes
@@ -103,7 +100,7 @@ public:
     // TiltSpread (v0.2.10): per-grain RANDOM tilt scatter [0,1]. Each grain
     // draws its own peak position around Tilt — clouds of mixed envelope
     // characters (attack grains and swell grains interleaved), the same
-    // scatter philosophy as Psprd (pitch) and Color (spectrum). Spawn-time
+    // scatter philosophy as Psprd (pitch). Spawn-time
     // only; at 0 no PRNG draw occurs, preserving bit-identity.
     od::Inlet  mTiltSprdIn  {"TiltSpread"};
     // Diffuse (menu option, 1 = Off · 2 = On): 4 cascaded Schroeder allpasses
@@ -178,7 +175,7 @@ public:
     bool  getGrainReverse(int i)  const { return mGrains[i].reverse; }  // glyph points down
     bool  getGrainLive(int i)     const { return mGrains[i].live; }     // + isSampleMode → regen grain
     bool  isSampleMode()          const { return mpSample != nullptr; }
-    // Darker of the two filter alphas: Color scatter (and the binaural shadow)
+    // Darker of the two filter alphas: the binaural head shadow
     // → glyph brightness. 1 = fully open.
     float getGrainAlphaMin(int i) const {
         const Grain &g = mGrains[i];
@@ -362,7 +359,7 @@ private:
                      int sampleOffset, bool liveMode, float compress, float binaural,
                      int scaleSel, int heads, float headSpread, float headTune,
                      float snap,
-                     float feedback, float color, float tilt, float tiltSprd);
+                     float feedback, float tilt, float tiltSprd);
     int   findSlot(int grainsCap);
 
 #endif // SWIGLUA

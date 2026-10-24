@@ -106,7 +106,6 @@ Dirac::Dirac()
     addInput(mHeadSpreadIn);
     addInput(mHeadTuneIn);
     addInput(mSnapIn);         // v0.2.0 — onset-locked spawning
-    addInput(mColorIn);        // v0.2.2 — per-grain cutoff scatter
     addInput(mTiltIn);         // v0.2.10 — envelope peak position (appended)
     addInput(mTiltSprdIn);     // v0.2.10 — per-grain tilt scatter
     addInput(mWindowIn);       // v0.2.10 — grain shape select (appended last)
@@ -315,7 +314,7 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
                        int sampleOffset, bool liveMode, float compress, float binaural,
                        int scaleSel, int heads, float headSpread, float headTune,
                        float snap,
-                       float feedback, float color, float tilt, float tiltSprd)
+                       float feedback, float tilt, float tiltSprd)
 {
     const int slot = findSlot(grainsCap);
     if (slot < 0) return;
@@ -563,20 +562,6 @@ void Dirac::spawnGrain(float playhead, int sampleCount, float posJtr, float sprd
         g.stereo = detuned;
     }
 
-    // ── COLOR (v0.2.2): per-grain cutoff scatter — the spectral Psprd ───────
-    // Each grain draws a random low-pass cutoff, log-uniform from 20 kHz down to
-    // ~600 Hz at Color = 1, so dark and bright grains interleave in one cloud.
-    // Reuses the binaural head-shadow one-pole per ear (min-combine keeps the
-    // darker of shadow vs colour). Render cost is the already-gated LP path;
-    // Color 0 = bit-identical.
-    if (color > 0.0001f) {
-        const float u  = randUnipolar();
-        const float fc = 20000.0f * expf(-3.5f * color * u);   // 20 kHz → ~600 Hz
-        const float aC = 1.0f - expf(-kTwoPi * fc / float(kSampleRate));
-        if (g.lpAlphaL > aC) g.lpAlphaL = aC;
-        if (g.lpAlphaR > aC) g.lpAlphaR = aC;
-    }
-
 
     // Place the read positions: whole sample (wrapped into the ring or the
     // sample) + fraction. floor() here is spawn-rate, not per sample.
@@ -663,7 +648,6 @@ void Dirac::process()
     const float headSpread = std::max(0.0f, std::min(sanitize(mHeadSpreadIn.buffer()[0]), 1.0f));
     const float headTune   = std::max(-12.0f, std::min(sanitize(mHeadTuneIn.buffer()[0]), 12.0f));
     const float snap       = std::max(0.0f, std::min(sanitize(mSnapIn.buffer()[0]),  1.0f));
-    const float color      = std::max(0.0f, std::min(sanitize(mColorIn.buffer()[0]), 1.0f));
     // Tilt is BIPOLAR: −1 attack … 0 symmetric (default/unpatched) … +1 swell.
     const float tilt       = std::max(-1.0f, std::min(sanitize(mTiltIn.buffer()[0]), 1.0f));
     const float tiltSprd   = std::max(0.0f, std::min(sanitize(mTiltSprdIn.buffer()[0]), 1.0f));
@@ -769,7 +753,7 @@ void Dirac::process()
             spawnGrain(playheadEff, sampleCount, posJtr, sprd, detune, level,
                        (revprob > 0.0f) && (randUnipolar() < revprob), psprd, grains,
                        holdOn, semiShift, grainDuration, hopSamples, spawnAt, liveMode, compress, binaural, scale,
-                       heads, headSpread, headTune, snap, feedback, color, tilt, tiltSprd);
+                       heads, headSpread, headTune, snap, feedback, tilt, tiltSprd);
             mSpawnTimer += hopSamples;
         }
     } else {
@@ -782,7 +766,7 @@ void Dirac::process()
                 spawnGrain(playheadEff, sampleCount, posJtr, sprd, detune, level,
                            (revprob > 0.0f) && (randUnipolar() < revprob), psprd, grains,
                            holdOn, semiShift, grainDuration, hopSamples, s, liveMode, compress, binaural, scale,
-                           heads, headSpread, headTune, snap, feedback, color, tilt, tiltSprd);
+                           heads, headSpread, headTune, snap, feedback, tilt, tiltSprd);
             }
             last = fireBuf[s];
         }
@@ -815,7 +799,7 @@ void Dirac::process()
         const float kHalfT  = float(kEnvTableSize / 2);
         const float lpAL = g.lpAlphaL, lpAR = g.lpAlphaR;   // head-shadow LP (1 = transparent)
         float lpL = g.lpStateL, lpR = g.lpStateR;
-        // Binaural head-shadow or Color engaged?
+        // Binaural head-shadow engaged?
         const bool doShadow = (lpAL < 0.9999f) || (lpAR < 0.9999f);
         // This grain's envelope = blend of two static shape tables by its captured
         // Texture (perc→Hann below 0.5, Hann→Tukey above). Selected once per grain.

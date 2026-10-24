@@ -37,7 +37,7 @@ TOOLCHAIN ?= docker
 
 PKG     := dirac
 MODULE  := libdirac
-VERSION := 0.2.11
+VERSION := 0.2.12
 ARCH    := am335x
 
 SRCDIR  := src
@@ -281,7 +281,7 @@ check-lua:
 # ── host tests (no hardware) ────────────────────────────────────────────────
 # The self-checking modes (each exits non-zero on failure). ident / seam /
 # headsnap / speed print numbers for comparison and are run by hand.
-HOSTMODES := pitch nan fieldpos snapt colort difft freezet sfbt headscale fbdc windowt tiltt winbankt
+HOSTMODES := pitch nan fieldpos snapt difft freezet sfbt headscale fbdc windowt tiltt winbankt
 hosttest: check-api check-ports check-version check-lua
 	g++ -std=c++11 -O2 -ffast-math -fno-finite-math-only -DHAS_SPEED -Itest/host -Isrc src/Dirac.cpp test/host/main.cpp -o test/t
 	@for m in $(HOSTMODES); do ./test/t $$m > /tmp/dirac-hosttest-$$m.txt 2>&1 \

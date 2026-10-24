@@ -5,7 +5,7 @@ the audio, windowed, pitched by playback speed, and layered.
 It runs on a live input by default and switches to granulating a loaded
 sample as soon as you select one from the menu.
 
-Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.11**
+Unit title: **Dirac** · mnemonic **Di** · stereo out · current version **0.2.12**
 
 ---
 
@@ -81,7 +81,6 @@ can run at once.
 | tilt | Tilt | −1…+1 / 0 | **Envelope peak position** — tilts the time axis of whatever window is active (Texture morph or a fixed Window shape): −1 = peak at the start (any shape becomes its decay version), 0 = symmetric (classic), +1 = swell into a hard stop. Unpatched CV = neutral. |
 | tsprd | TiltSpread | 0–1 / 0 | **Tilt scatter** — each grain draws its own peak position around `tilt`. Attack grains and swell grains interleave in one cloud; a static cloud starts breathing. |
 | snap | Snap | 0–1 / 0 | This pulls each grain's read position onto the nearest transient instead of wherever the metronome landed. 0 = free (classic), 1 = locked. Turns a smear of a drum loop back into hits. |
-| color | Color | 0–1 / 0 | Each grain draws a random low-pass cutoff, darker with Color (20 kHz down to ~600 Hz at 1). The spectral version of psprd. |
 | comp | Compress | 0–1 / 0 | Per-grain leveling that boosts quiet source bits and tames loud ones (±12 dB) so sparse clouds stay even. |
 | bin | Binaural | 0–1 / 0 | Gives 3D depth by way of interaural time difference (ITD) + head-shadow filtering on top of the pan, scaled by Spread. 0 = plain stereo. |
 | heads | Heads | 1–4 / 1 | The number of playheads sharing the buffer. Grains are dealt round-robin between them. 1 = classic single head. *(Hidden until **Playheads → multi** is set in the config menu.)* |
@@ -126,7 +125,7 @@ One arrow = one grain. If you learn the properties you can tell what is going on
 | Glyph points **down** (stem above) | Reverse grain | `rev` |
 | **Hollow** outline instead of filled | Regeneration grain (reading the feedback ring, sample mode) | `fdbk` |
 | Overall brightness | The grain's real loudness | `level`, `compress`, source dynamics |
-| Some glyphs are more **dim** such as Spectrally dark grains and the binaural far-ear sounds | `color`, `bin` |
+| Some glyphs are more **dim**: the binaural far-ear grains | `bin` |
 | Trails linger ~2× longer | Diffusion | **Diffuse** (menu) |
 | Whole constellation freezes | Cloud frozen (grains looping) | `hold` |
 | **✳ snowflake**, top-right — Capture ring frozen | **Capture: freeze** (menu) |
@@ -256,6 +255,11 @@ g++ -std=c++11 -O2 -ffast-math -Itest/host -Isrc src/Dirac.cpp test/host/main.cp
 
 ## Changelog (recent)
 
+- **0.2.12** — **Color removed.** The per-grain cutoff scatter rarely made
+  an obvious difference: half its grains kept cutoffs above ~3.5 kHz even at
+  full, through a gentle one-pole. Removing it costs nothing in CPU (it was
+  free at 0) and shortens the strip. Patches that used it load without it;
+  everything else sounds bit-identical.
 - **0.2.11** — **Grains play in tune.** A grain's read position was a single
   32-bit float holding the absolute sample position, and a float can't hold a
   pitch step exactly once the position is large: +1 semitone was 5 cents sharp

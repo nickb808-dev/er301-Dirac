@@ -90,7 +90,6 @@ function Dirac:onLoadGraph(channelCount)
   param(self, head, "headspread", "HeadSpread", 0.0)   -- position offset between heads
   param(self, head, "headtune",   "HeadTune",   0.0)   -- pitch interval between heads (st)
   param(self, head, "snap",      "Snap",      0.0)     -- pull grain starts onto transients
-  param(self, head, "color",     "Color",     0.0)     -- per-grain cutoff scatter (v0.2.2)
   param(self, head, "window",    "Window",    0.0)     -- grain shape 0..7 (v0.2.10)
   param(self, head, "tilt",      "Tilt",      0.0)     -- envelope peak position, bipolar (v0.2.10)
   param(self, head, "tiltspread","TiltSpread",0.0)     -- per-grain tilt scatter (v0.2.10)
@@ -382,7 +381,7 @@ end
 local controlOrder = {
   "trig", "hold", "semishift", "voct", "playhead", "speed", "grainlen", "grains", "rate",
   "posjtr", "spread", "detune",
-  "psprd", "scale", "window", "texture", "tilt", "tiltspread", "color", "snap", "compress", "revprob", "level", "mix", "feedback", "binaural",
+  "psprd", "scale", "window", "texture", "tilt", "tiltspread", "snap", "compress", "revprob", "level", "mix", "feedback", "binaural",
 }
 
 -- "wave" LEADS the expanded strip so the waveform is the default main display
@@ -482,7 +481,6 @@ function Dirac:onLoadViews(objects, branches)
      app.LinearDialMap(-1, 1))
   gb("tiltspread","tsprd","Tilt scatter per grain", Encoder.getMap("[0,1]"), 0.0)
   gb("snap",     "snap",  "Lock grains to onsets", Encoder.getMap("[0,1]"), 0.0)
-  gb("color",    "color", "Cutoff scatter: bright-dark", Encoder.getMap("[0,1]"), 0.0)
   -- Integer-stepping dials: Grains (1..16) and Semitone (−24..24) move in whole units.
   gb("grains",   "grains","Polyphony cap", intMap(1, 16), 12.0, app.LinearDialMap(-16, 16), nil, 0)
   gb("semishift","semi",  "Transpose (st)", intMap(-24, 24), 0.0, app.LinearDialMap(-24, 24), nil, 0)

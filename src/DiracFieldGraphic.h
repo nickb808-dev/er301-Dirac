@@ -194,9 +194,9 @@ namespace dirac
           // vs quiet source bits read at a glance.
           float loud = env * mpGrain->getGrainGain(i) * 2.0f;
           if (loud > 1.0f) loud = 1.0f;
-          // Color (v0.2.5): spectrally dark grains draw DIM. alphaMin spans
-          // ~0.075 (600 Hz, Color full) … 0.93 (open); binaural's shadowed far
-          // ear also dims a touch — farther reads darker, which is right.
+          // Filtered grains draw DIM (v0.2.5). Since Color's removal (v0.2.12)
+          // that is binaural's shadowed far ear only (alphaMin down to ~0.5 at
+          // full side): farther reads a touch darker, which is right.
           const float aMin = mpGrain->getGrainAlphaMin(i);
           float dim = 0.35f + 0.76f * (aMin - 0.075f);
           if (dim > 1.0f) dim = 1.0f; else if (dim < 0.35f) dim = 0.35f;
