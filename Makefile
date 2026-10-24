@@ -77,7 +77,9 @@ CXXFLAGS_ARM := \
 	-Dfar=
 
 # DSP code: optimise for speed + NEON vectorisation.
-CXXFLAGS_DSP := $(CXXFLAGS_COMMON) -O2 $(CXXFLAGS_ARM)
+# -fstack-usage writes each engine function's frame to obj/*.su for
+# tools/check-stack.sh (a report only: the generated code is identical).
+CXXFLAGS_DSP := $(CXXFLAGS_COMMON) -O2 $(CXXFLAGS_ARM) -fstack-usage
 
 # SWIG wrapper: optimise for size (lots of generated boilerplate).
 # NOTE: NO -include compat_swig.h here — the #define fprintf macro conflicts
@@ -251,7 +253,15 @@ docker-build: docker-image | $(OUTDIR)
 PKGDIR  := build/$(ARCH)
 PKGFILE := $(PKGDIR)/$(PKG)-$(VERSION).pkg
 
-pkg: $(PKGFILE)
+pkg: check-stack $(PKGFILE)
+
+# The ER-301's audio thread has a 2 KB stack (ER301-UNIT-STANDARD.md §2a):
+# Noether 0.8.10 overflowed it with a 1 KB local and distorted ALL audio
+# until a reboot. Fail the package on any engine frame over the limit.
+STACK_LIMIT := 512
+check-stack: $(OUTLIB)
+	@sh tools/check-stack.sh $(STACK_LIMIT) $(OBJS_DIR)/Dirac.su
+
 
 $(PKGFILE): $(OUTLIB) assets/toc.lua assets/Dirac.lua assets/WaveHeadView.lua assets/GrainFieldView.lua | $(PKGDIR)
 	@echo ">>> PKG $(PKGFILE)"
